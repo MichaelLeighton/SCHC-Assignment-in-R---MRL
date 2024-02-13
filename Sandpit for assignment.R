@@ -96,3 +96,5 @@ if (nrow(practices) == 0) {
 }
 
 dbDisconnect(con)
+
+#Test comment

@@ -56,3 +56,5 @@ if (!exists$exists) {
 }
 
 dbDisconnect(con)
+
+# Test comment
