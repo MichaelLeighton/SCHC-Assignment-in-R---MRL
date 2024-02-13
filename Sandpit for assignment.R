@@ -22,7 +22,6 @@ df <- dbGetQuery(con, "
 ")
 
 # Function to query practices by postcode
-# formatted_postcode provides protection against future additional formatting
 query_practices_by_postcode <- function(postcode) {
   formatted_postcode <- sprintf("%s", postcode)
   query <- sprintf("
@@ -45,7 +44,7 @@ query_similar_practices <- function(postcode) {
 }
 
 # Prompt the user to enter a postcode
-user_postcode <- readline(prompt = "Enter your postcode: ")
+user_postcode <- readline(prompt = "Enter the postcode of the GP of interest: ")
 
 # Fetch practice(s) by postcode
 practices <- query_practices_by_postcode(user_postcode)
@@ -69,7 +68,10 @@ if (nrow(practices) == 0) {
       cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
       
       # Fetch the postcode of the selected practice
-      selected_practice_postcode <- dbGetQuery(con, sprintf("SELECT postcode FROM address WHERE practiceid = '%s'", selected_practice_id))$postcode
+      selected_practice_postcode <- dbGetQuery(con, sprintf("
+                                                            SELECT postcode 
+                                                            FROM address 
+                                                            WHERE practiceid = '%s'", selected_practice_id))$postcode
       
       # Fetch top 10 drugs for the selected practice
       query <- sprintf("SELECT gp.bnfname, COUNT(*) AS total_items
@@ -88,6 +90,7 @@ if (nrow(practices) == 0) {
         if(nrow(top_drugs) == 0) {
           cat("No drugs found for the selected practice.\n")
         } else {
+          cat("Top 10 drugs prescribed:\n")
           print(top_drugs)
         }
       }, error = function(e) {
@@ -111,6 +114,7 @@ if (nrow(practices) == 0) {
       
       # Check results and display
       if(nrow(top_drug_categories) > 0) {
+        cat("Top 5 drug categories")
         print(top_drug_categories)
       } else {
         cat("No drug categories found for the selected practice.\n")
@@ -121,13 +125,63 @@ if (nrow(practices) == 0) {
     cat("No practices found with a similar postcode.\n")
   }
 } else if (nrow(practices) == 1) {
-  # Only one practice found, proceed to fetch top 10 drugs
-  # Code for fetching top 10 drugs...
+  # Fetch the postcode of the selected practice
+    selected_practice_id <- practices$practiceid[1]
+    selected_practice_name <- practices$street[1]
+    selected_practice_postcode <- dbGetQuery(con, sprintf("
+                                                            SELECT postcode 
+                                                            FROM address 
+                                                            WHERE practiceid = '%s'", selected_practice_id))$postcode
+      
+    # Fetch top 10 drugs for the selected practice
+    query <- sprintf("SELECT gp.bnfname, COUNT(*) AS total_items
+                        FROM gp_data_up_to_2015 AS gp
+                        JOIN address AS ad ON gp.practiceid = ad.practiceid
+                        WHERE ad.postcode LIKE '%s%%'
+                        GROUP BY gp.bnfname
+                        ORDER BY total_items DESC
+                        LIMIT 10;", selected_practice_postcode)
+      
+    cat("Executing SQL Query:\n", query, "\n")
+      
+    tryCatch({
+      top_drugs <- dbGetQuery(con, query)
+      # Display the top drugs
+      if(nrow(top_drugs) == 0) {
+        cat("No drugs found for the selected practice.\n")
+      } else {
+        cat("Top 10 drugs prescribed:\n")
+        print(top_drugs)
+      }
+    }, error = function(e) {
+      cat("Error executing query:\n")
+      message(e)
+    })
+    
+    # Query for top 5 drug categories for the selected practice
+    query_for_top_drug_categories <- sprintf("
+                                              SELECT DISTINCT b.sectiondesc, COUNT(*) AS TotalPrescriptions
+                                              FROM bnf AS b
+                                              JOIN gp_data_up_to_2015 AS gp ON LEFT(b.bnfchemical, 6) = LEFT(gp.bnfcode, 6)
+                                              JOIN address AS ad ON gp.practiceid = ad.practiceid
+                                              WHERE ad.practiceid = '%s'
+                                              GROUP BY b.sectiondesc
+                                              ORDER BY TotalPrescriptions DESC
+                                              LIMIT 5;", selected_practice_id)
+    
+    # Execute the query for top drug categories
+    top_drug_categories <- dbGetQuery(con, query_for_top_drug_categories)
+      
+    # Check results and display
+    if(nrow(top_drug_categories) > 0) {
+      cat("Top 5 drug categories")
+      print(top_drug_categories)
+    } else {
+      cat("No drug categories found for the selected practice.\n")
+    }
 } else {
   # Multiple practices found, prompt user to select one
   # Code for prompting user to select one...
 }
 
 dbDisconnect(con)
-
-#Test comment
