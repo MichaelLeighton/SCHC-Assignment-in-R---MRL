@@ -7,6 +7,8 @@ con <- dbConnect(drv, dbname='gp_practice_data', host='localhost',
                  port=5432, user='postgres',
                  password=.rs.askForPassword('Password:'))
 
+# Don't think the following code is necessary
+
 tables <- dbListTables(con)
 df <- dbGetQuery(con, "
     select gp.practiceid as practice_id,
@@ -20,16 +22,25 @@ df <- dbGetQuery(con, "
 ")
 
 # Function to query practices by postcode
+# formatted_postcode provides protection against future additional formatting
 query_practices_by_postcode <- function(postcode) {
   formatted_postcode <- sprintf("%s", postcode)
-  query <- sprintf("SELECT DISTINCT ad.practiceid, ad.street FROM address ad WHERE ad.postcode LIKE '%s' ORDER BY ad.street", formatted_postcode)
+  query <- sprintf("
+                   SELECT DISTINCT ad.practiceid, ad.street 
+                   FROM address AS ad 
+                   WHERE ad.postcode LIKE '%s' 
+                   ORDER BY ad.street", formatted_postcode)
   return(dbGetQuery(con, query))
 }
 
 # Function to query similar practices by postcode (first four characters)
 query_similar_practices <- function(postcode) {
   formatted_postcode <- sprintf("%s%%", substr(postcode, 1, 4))
-  query <- sprintf("SELECT DISTINCT ad.practiceid, ad.street FROM address ad WHERE ad.postcode LIKE '%s' ORDER BY ad.street", formatted_postcode)
+  query <- sprintf("
+                   SELECT DISTINCT ad.practiceid, ad.street 
+                   FROM address AS ad 
+                   WHERE ad.postcode LIKE '%s' 
+                   ORDER BY ad.street", formatted_postcode)
   return(dbGetQuery(con, query))
 }
 
@@ -83,6 +94,28 @@ if (nrow(practices) == 0) {
         cat("Error executing query:\n")
         message(e)
       })
+    
+      # Query for top 5 drug categories for the selected practice
+      query_for_top_drug_categories <- sprintf("
+                                                SELECT DISTINCT b.bnfchemical, b.sectiondesc, COUNT(*) AS TotalPrescriptions
+                                                FROM bnf b
+                                                JOIN gp_data_up_to_2015 gp ON b.bnfchemical = SUBSTRING(gp.bnfcode FROM 1 FOR LENGTH(b.bnfchemical))
+                                                JOIN address a ON gp.practiceid = a.practiceid
+                                                WHERE a.practiceid = '%s'
+                                                GROUP BY b.bnfchemical, b.sectiondesc
+                                                ORDER BY TotalPrescriptions DESC
+                                                LIMIT 5;", selected_practice_id)
+      
+      # Execute the query for top drug categories
+      top_drug_categories <- dbGetQuery(con, query_for_top_drug_categories)
+      
+      # Check results and display
+      if(nrow(top_drug_categories) > 0) {
+        print(top_drug_categories)
+      } else {
+        cat("No drug categories found for the selected practice.\n")
+      }
+      
     }
   } else {
     cat("No practices found with a similar postcode.\n")
