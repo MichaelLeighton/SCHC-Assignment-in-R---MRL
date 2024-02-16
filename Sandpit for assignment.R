@@ -1,5 +1,7 @@
 library(RPostgreSQL)
 library(DBI)
+library(ggplot2)
+library(dplyr)
 
 # Establish database connection
 drv <- dbDriver('PostgreSQL')
@@ -60,6 +62,7 @@ calculate_median_threshold <- function(con) {
 # Function to define size of practice
 define_practice_size_by_median <- function(con, practice_id) {
   # Dynamically calculate the median threshold
+  cat("\nDetermining size of practice...\n")
   median_threshold <- calculate_median_threshold(con)
   
   # SQL query to count total prescriptions for the given practice_id
@@ -68,8 +71,6 @@ define_practice_size_by_median <- function(con, practice_id) {
                    FROM gp_data_up_to_2015
                    WHERE practiceid = '%s'", practice_id)
   
-  cat("\nDetermining size of practice...\n")
-  
   # Execute the query
   result <- dbGetQuery(con, query)
   
@@ -77,9 +78,9 @@ define_practice_size_by_median <- function(con, practice_id) {
   total_prescriptions <- ifelse(nrow(result) > 0, result$total_prescriptions, 0)
   
   # Categorize the practice based on the median threshold
-  practice_size <- if (total_prescriptions > median_threshold) 'big' else 'small'
+  practice_size <- if (total_prescriptions > median_threshold) 'Big' else 'Small'
   
-  cat(sprintf("\nThe size of this practice (based on number of prescriptions in Wales) is: %s.\n", practice_size))
+  cat(sprintf("\nThe size of this practice (based on number of prescriptions in Wales) is classified as: %s.\n", practice_size))
   
   return(practice_size)
 }
@@ -131,6 +132,171 @@ fetch_and_display_top_drug_categories <- function(con, selected_practice_id) {
   }
 }
 
+# Function to fetch hypertension data for a specific practice
+fetch_hypertension_rate_specific <- function(con, practice_id) {
+  query <- sprintf("
+    SELECT indicator, AVG(ratio) * 100 AS percentage
+    FROM qof_achievement
+    WHERE orgcode = '%s' AND indicator IN ('HYP001', 'HYP006')
+    GROUP BY indicator", practice_id)
+  data <- dbGetQuery(con, query)
+  return(data)
+}
+
+# Function to calculate mean hypertension rate for all practices in Wales
+fetch_mean_hypertension_rate_wales <- function(con) {
+  query <- "
+    SELECT indicator, AVG(ratio) * 100 AS percentage
+    FROM qof_achievement
+    WHERE indicator IN ('HYP001', 'HYP006')
+    GROUP BY indicator"
+  data <- dbGetQuery(con, query)
+  return(data)
+}
+
+# Function to calculate mean hypertension rate for similar size practice in Wales
+fetch_mean_hypertension_rate_same_size <- function(con, practice_size) {
+  median_threshold <- calculate_median_threshold(con)
+  practice_sizes <- dbGetQuery(con, "
+    SELECT practiceid,
+           COUNT(*) AS total_prescriptions
+    FROM gp_data_up_to_2015
+    GROUP BY practiceid
+  ")
+  practice_sizes$size_category <- ifelse(practice_sizes$total_prescriptions > median_threshold, 'Big', 'Small')
+  same_size_practices <- practice_sizes %>% 
+    filter(size_category == practice_size) %>% 
+    .$practiceid
+  query <- sprintf("
+    SELECT indicator, AVG(ratio) * 100 AS percentage
+    FROM qof_achievement
+    WHERE indicator IN ('HYP001', 'HYP006') AND orgcode IN ('%s')
+    GROUP BY indicator", paste(same_size_practices, collapse="','"))
+  same_size_data <- dbGetQuery(con, query)
+  return(same_size_data)
+}
+
+# Function to visualize hypertension comparison
+visualize_hypertension_comparison <- function(con, selected_practice_id) {
+  # Fetch hypertension data for the selected practice
+  practice_data <- fetch_hypertension_rate_specific(con, selected_practice_id)
+  practice_data$Category <- "Selected Practice"
+  
+  # Calculate mean hypertension rate across Wales
+  wales_data <- fetch_mean_hypertension_rate_wales(con)
+  wales_data$Category <- "Wales Average"
+  
+  # Determine the size of the selected practice
+  practice_size <- define_practice_size_by_median(con, selected_practice_id)
+  
+  # Fetch mean rates for similarly sized practices
+  cat("\nPlotting Comparison of Hypertension Rate...\n")
+  same_size_data <- fetch_mean_hypertension_rate_same_size(con, practice_size)
+  same_size_data$Category <- sprintf("%s Practices Average", practice_size)
+  
+  # Now attempt to combine
+  combined_data <- rbind(practice_data, same_size_data, wales_data)
+  combined_data$Category <- factor(combined_data$Category, levels = c("Selected Practice", sprintf("%s Practices Average", practice_size), "Wales Average"))
+  
+  cat("\nComparison of Hypertension Rate:\n===============================\n")
+  print(combined_data)
+  cat("\nDefinitions:\n===========\nHYP001: The contractor establishes and maintains a register of patients with established hypertension.\nHYP006: The percentage of patients with hypertension in whom the last blood pressure reading (measured in the preceding 12 months) is 150/90 mmHg or less.\n")
+  
+  # Visualize the data
+  print(
+    ggplot(combined_data, aes(x = indicator, y = percentage, fill = Category)) +
+      geom_bar(stat = "identity", position = position_dodge()) +
+      scale_fill_brewer(palette = "Pastel1") +
+      labs(title = "Comparison of Hypertension Rate",
+           subtitle = "Selected Practice vs. Same Size Practices vs. Wales Average",
+           x = "Hypertension", y = "Percentage (%)",
+           fill = "Comparison Group") +
+      theme_minimal()
+  )
+}
+
+# Function to fetch obesity data for a specific practice
+fetch_obesity_rate_specific <- function(con, practice_id) {
+  query <- sprintf("
+    SELECT 'OB001W' AS indicator, AVG(ratio) * 100 AS percentage
+    FROM qof_achievement
+    WHERE orgcode = '%s' AND indicator = 'OB001W'
+    GROUP BY indicator", practice_id)
+  data <- dbGetQuery(con, query)
+  return(data)
+}
+
+# Function to calculate mean obesity rate for all practices in Wales
+fetch_mean_obesity_rate_wales <- function(con) {
+  query <- "
+    SELECT 'OB001W' AS indicator, AVG(ratio) * 100 AS percentage
+    FROM qof_achievement
+    WHERE indicator = 'OB001W'
+    GROUP BY indicator"
+  data <- dbGetQuery(con, query)
+  return(data)
+}
+
+# Function to calculate mean obesity rate for similar size practice in Wales
+fetch_mean_obesity_rate_same_size <- function(con, practice_size) {
+  median_threshold <- calculate_median_threshold(con)
+  practice_sizes <- dbGetQuery(con, "
+    SELECT practiceid,
+           COUNT(*) AS total_prescriptions
+    FROM gp_data_up_to_2015
+    GROUP BY practiceid
+  ")
+  practice_sizes$size_category <- ifelse(practice_sizes$total_prescriptions > median_threshold, 'Big', 'Small')
+  same_size_practices <- practice_sizes %>% 
+    filter(size_category == practice_size) %>% 
+    .$practiceid
+  query <- sprintf("
+    SELECT 'OB001W' AS indicator, AVG(ratio) * 100 AS percentage
+    FROM qof_achievement
+    WHERE indicator = 'OB001W' AND orgcode IN ('%s')
+    GROUP BY indicator", paste(same_size_practices, collapse="','"))
+  same_size_data <- dbGetQuery(con, query)
+  return(same_size_data)
+}
+
+# Function to visualize obesity comparison
+visualize_obesity_comparison <- function(con, selected_practice_id) {
+  # Fetch obesity data for the selected practice
+  practice_data <- fetch_obesity_rate_specific(con, selected_practice_id)
+  practice_data$Category <- "Selected Practice"
+  
+  # Calculate mean obesity rate across Wales
+  wales_data <- fetch_mean_obesity_rate_wales(con)
+  wales_data$Category <- "Wales Average"
+  
+  # Determine the size of the selected practice
+  practice_size <- define_practice_size_by_median(con, selected_practice_id)
+  
+  # Fetch mean rates for similarly sized practices
+  cat("\nPlotting Comparison of Obesity Rate...\n")
+  same_size_data <- fetch_mean_obesity_rate_same_size(con, practice_size)
+  same_size_data$Category <- sprintf("%s Practices Average", practice_size)
+  
+  # Combine data and adjust category levels for plotting
+  combined_data <- rbind(practice_data, same_size_data, wales_data)
+  combined_data$Category <- factor(combined_data$Category, levels = c("Selected Practice", sprintf("%s Practices Average", practice_size), "Wales Average"))
+  
+  cat("\nComparison of Obesity Rate:\n===============================\n")
+  print(combined_data)
+  
+  # Visualize the data
+  print(
+    ggplot(combined_data, aes(x = indicator, y = percentage, fill = Category)) +
+      geom_bar(stat = "identity", position = position_dodge()) +
+      scale_fill_brewer(palette = "Pastel1") +
+      labs(title = "Comparison of Obesity Rate",
+           subtitle = "Selected Practice vs. Same Size Practices vs. Wales Average",
+           x = "Obesity", y = "Percentage (%)",
+           fill = "Comparison Group") +
+      theme_minimal()
+  )
+}
+
 
 ###### PROGRAM INTRODUCTION ######
 
@@ -175,6 +341,9 @@ if (nrow(practices) == 0) {
       # Call the function to fetch and display top 5 drug categories
       fetch_and_display_top_drug_categories(con, selected_practice_id)
       
+      # Visualise hypertension data
+      visualize_hypertension_comparison(con, selected_practice_id)
+      
     }
   } else {
     cat("No practices found with a similar postcode.\n")
@@ -187,15 +356,19 @@ if (nrow(practices) == 0) {
                                                             SELECT postcode 
                                                             FROM address 
                                                             WHERE practiceid = '%s'", selected_practice_id))$postcode
-    
-    # Call the function to categorize and display practice size
-    define_practice_size_by_median(con, selected_practice_id)
+  
     
     # Call the function to fetch and display top 10 drugs
     fetch_and_display_top_drugs(con, selected_practice_postcode)
     
     # Call the function to fetch and display top 5 drug categories
     fetch_and_display_top_drug_categories(con, selected_practice_id)
+    
+    # Visualize hypertension data
+    visualize_hypertension_comparison(con, selected_practice_id)
+    
+    # Visualize obesity data
+    visualize_obesity_comparison(con, selected_practice_id)
     
 } else {
   cat("\nMultiple practices found for the provided postcode. Please select one from the list below:\n")
@@ -215,15 +388,14 @@ if (nrow(practices) == 0) {
     # Fetch the postcode of the selected practice
     selected_practice_postcode <- dbGetQuery(con, sprintf("SELECT postcode FROM address WHERE practiceid = '%s'", selected_practice_id))$postcode
     
-    # Call the function to categorize and display practice size
-    define_practice_size_by_median(con, selected_practice_id)
-    
     # Call function to fetch and display top 10 drugs
     fetch_and_display_top_drugs(con, selected_practice_postcode)
     
     # Query for top 5 drug categories for the selected practice
     fetch_and_display_top_drug_categories(con, selected_practice_id)
     
+    # Visualise hypertension data
+    visualize_hypertension_comparison(con, selected_practice_id)
   }
 }
 
