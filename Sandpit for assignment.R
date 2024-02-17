@@ -52,7 +52,7 @@ calculate_median_threshold <- function(con) {
     FROM RankedPrescriptions
     WHERE rn IN (FLOOR((cnt + 1) / 2), FLOOR((cnt + 2) / 2));
   "
-    result <- dbGetQuery(con, query)
+  result <- dbGetQuery(con, query)
   
   median_threshold <- result$median_prescriptions[1]
   
@@ -62,7 +62,6 @@ calculate_median_threshold <- function(con) {
 # Function to define size of practice
 define_practice_size_by_median <- function(con, practice_id) {
   # Dynamically calculate the median threshold
-  cat("\nDetermining size of practice...\n")
   median_threshold <- calculate_median_threshold(con)
   
   # SQL query to count total prescriptions for the given practice_id
@@ -177,24 +176,30 @@ fetch_mean_hypertension_rate_same_size <- function(con, practice_size) {
 }
 
 # Function to visualize hypertension comparison
-visualize_hypertension_comparison <- function(con, selected_practice_id) {
+visualize_hypertension_comparison <- function(con, selected_practice_id, practice_size) {
   # Fetch hypertension data for the selected practice
   practice_data <- fetch_hypertension_rate_specific(con, selected_practice_id)
-  practice_data$Category <- "Selected Practice"
+ 
   
   # Calculate mean hypertension rate across Wales
   wales_data <- fetch_mean_hypertension_rate_wales(con)
-  wales_data$Category <- "Wales Average"
-  
-  # Determine the size of the selected practice
-  practice_size <- define_practice_size_by_median(con, selected_practice_id)
   
   # Fetch mean rates for similarly sized practices
   cat("\nPlotting Comparison of Hypertension Rate...\n")
   same_size_data <- fetch_mean_hypertension_rate_same_size(con, practice_size)
+  
+  # Check for empty data frames before proceeding
+  if (nrow(practice_data) == 0 || nrow(wales_data) == 0 || nrow(same_size_data) == 0) {
+    cat("No data available for one or more categories. Cannot proceed with visualization.\n")
+    return()
+  }
+  
+  # Assign labels if all data frames have rows
+  practice_data$Category <- "Selected Practice"
+  wales_data$Category <- "Wales Average"
   same_size_data$Category <- sprintf("%s Practices Average", practice_size)
   
-  # Now attempt to combine
+  # Combine the data
   combined_data <- rbind(practice_data, same_size_data, wales_data)
   combined_data$Category <- factor(combined_data$Category, levels = c("Selected Practice", sprintf("%s Practices Average", practice_size), "Wales Average"))
   
@@ -260,29 +265,35 @@ fetch_mean_obesity_rate_same_size <- function(con, practice_size) {
 }
 
 # Function to visualize obesity comparison
-visualize_obesity_comparison <- function(con, selected_practice_id) {
+visualize_obesity_comparison <- function(con, selected_practice_id, practice_size) {
   # Fetch obesity data for the selected practice
   practice_data <- fetch_obesity_rate_specific(con, selected_practice_id)
-  practice_data$Category <- "Selected Practice"
   
   # Calculate mean obesity rate across Wales
   wales_data <- fetch_mean_obesity_rate_wales(con)
-  wales_data$Category <- "Wales Average"
-  
-  # Determine the size of the selected practice
-  practice_size <- define_practice_size_by_median(con, selected_practice_id)
   
   # Fetch mean rates for similarly sized practices
   cat("\nPlotting Comparison of Obesity Rate...\n")
   same_size_data <- fetch_mean_obesity_rate_same_size(con, practice_size)
+  
+  # Check for empty data frames before proceeding
+  if (nrow(practice_data) == 0 || nrow(wales_data) == 0 || nrow(same_size_data) == 0) {
+    cat("No data available for one or more categories. Cannot proceed with visualization.\n")
+    return()
+  }
+  
+  # Assign labels if all data frames have rows
+  practice_data$Category <- "Selected Practice"
+  wales_data$Category <- "Wales Average"
   same_size_data$Category <- sprintf("%s Practices Average", practice_size)
   
   # Combine data and adjust category levels for plotting
   combined_data <- rbind(practice_data, same_size_data, wales_data)
   combined_data$Category <- factor(combined_data$Category, levels = c("Selected Practice", sprintf("%s Practices Average", practice_size), "Wales Average"))
   
-  cat("\nComparison of Obesity Rate:\n===============================\n")
+  cat("\nComparison of Obesity Rate:\n==========================\n")
   print(combined_data)
+  cat("\nDefinitions:\n===========\nOB001W: The contractor establishes and maintains a register of patients aged 16 or over with a BMI greater than or equal to 30 in the preceding 15 months.\n")
   
   # Visualize the data
   print(
@@ -297,8 +308,28 @@ visualize_obesity_comparison <- function(con, selected_practice_id) {
   )
 }
 
+# Function combining top 10 drugs, top 5 drug categories, and hypertension/obesity data
+combined_drug_hypertension_obesity_data <- function(con, selected_practice_postcode, selected_practice_id) {
+  # Fetch and display top 10 drugs
+  fetch_and_display_top_drugs(con, selected_practice_postcode)
+  
+  # Fetch and display top 5 drug categories
+  fetch_and_display_top_drug_categories(con, selected_practice_id)
+  
+  # Determine the size of the selected practice
+  practice_size <- define_practice_size_by_median(con, selected_practice_id)
+  
+  # Fetch, calculate, and visualize hypertension rates
+  visualize_hypertension_comparison(con, selected_practice_id, practice_size)
+  
+  # Fetch, calculate, and visualize obesity rates
+  visualize_obesity_comparison(con, selected_practice_id, practice_size)
+}
 
-###### PROGRAM INTRODUCTION ######
+###### PROGRAM ######
+
+# Introduction to the GP Drug Finder Program
+
 
 # Prompt the user to enter a postcode
 user_postcode <- readline(prompt = "Enter the postcode of the GP of interest: ")
@@ -332,17 +363,8 @@ if (nrow(practices) == 0) {
                                                             FROM address 
                                                             WHERE practiceid = '%s'", selected_practice_id))$postcode
       
-      # Call the function to categorize and display practice size
-      define_practice_size_by_median(con, selected_practice_id)
-      
-      # Call the function to fetch and display top 10 drugs
-      fetch_and_display_top_drugs(con, selected_practice_postcode)
-    
-      # Call the function to fetch and display top 5 drug categories
-      fetch_and_display_top_drug_categories(con, selected_practice_id)
-      
-      # Visualise hypertension data
-      visualize_hypertension_comparison(con, selected_practice_id)
+      # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
+      combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
       
     }
   } else {
@@ -350,26 +372,17 @@ if (nrow(practices) == 0) {
   }
 } else if (nrow(practices) == 1) {
   # Fetch the postcode of the selected practice
-    selected_practice_id <- practices$practiceid[1]
-    selected_practice_name <- practices$street[1]
-    selected_practice_postcode <- dbGetQuery(con, sprintf("
+  selected_practice_id <- practices$practiceid[1]
+  selected_practice_name <- practices$street[1]
+  cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+  selected_practice_postcode <- dbGetQuery(con, sprintf("
                                                             SELECT postcode 
                                                             FROM address 
                                                             WHERE practiceid = '%s'", selected_practice_id))$postcode
   
-    
-    # Call the function to fetch and display top 10 drugs
-    fetch_and_display_top_drugs(con, selected_practice_postcode)
-    
-    # Call the function to fetch and display top 5 drug categories
-    fetch_and_display_top_drug_categories(con, selected_practice_id)
-    
-    # Visualize hypertension data
-    visualize_hypertension_comparison(con, selected_practice_id)
-    
-    # Visualize obesity data
-    visualize_obesity_comparison(con, selected_practice_id)
-    
+  # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
+  combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
+  
 } else {
   cat("\nMultiple practices found for the provided postcode. Please select one from the list below:\n")
   for (i in 1:nrow(practices)) {
@@ -388,14 +401,8 @@ if (nrow(practices) == 0) {
     # Fetch the postcode of the selected practice
     selected_practice_postcode <- dbGetQuery(con, sprintf("SELECT postcode FROM address WHERE practiceid = '%s'", selected_practice_id))$postcode
     
-    # Call function to fetch and display top 10 drugs
-    fetch_and_display_top_drugs(con, selected_practice_postcode)
-    
-    # Query for top 5 drug categories for the selected practice
-    fetch_and_display_top_drug_categories(con, selected_practice_id)
-    
-    # Visualise hypertension data
-    visualize_hypertension_comparison(con, selected_practice_id)
+    # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
+    combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
   }
 }
 
