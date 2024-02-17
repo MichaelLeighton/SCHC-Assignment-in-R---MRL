@@ -86,7 +86,7 @@ define_practice_size_by_median <- function(con, practice_id) {
 
 # Function to fetch and display the top 10 drugs by practice
 fetch_and_display_top_drugs <- function(con, selected_practice_postcode) {
-  query <- sprintf("SELECT gp.bnfname, COUNT(*) AS total_items
+  query <- sprintf("SELECT gp.bnfname, SUM(gp.items) AS total_items
                     FROM gp_data_up_to_2015 AS gp
                     JOIN address AS ad ON gp.practiceid = ad.practiceid
                     WHERE ad.postcode LIKE '%s%%'
@@ -346,27 +346,32 @@ if (nrow(practices) == 0) {
   cat("No practices found for the provided postcode. Finding practices with a similar postcode...\n")
   # If there are 1 or more practices found: 
   if (nrow(similar_practices) > 0) {
-    for (i in 1:nrow(similar_practices)) {
-      cat(sprintf("%d. %s\n", i, similar_practices$street[i]))
+    repeat{
+      for (i in 1:nrow(similar_practices)) {
+        cat(sprintf("%d. %s\n", i, similar_practices$street[i]))
+      }
+      selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select and press Enter: "))
+      
+      if (selection >= 1 && selection <= nrow(similar_practices)) {
+        break
+      } else {
+        cat("Invalid selection. Please try again.\n \n")
+      }
     }
-    selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select and press Enter: "))
-    if (selection < 1 || selection > nrow(similar_practices)) {
-      cat("Invalid selection.\n")
-    } else {
-      selected_practice_id <- similar_practices$practiceid[selection]
-      selected_practice_name <- similar_practices$street[selection]
-      cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+    
+    selected_practice_id <- similar_practices$practiceid[selection]
+    selected_practice_name <- similar_practices$street[selection]
+    cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
       
-      # Fetch the postcode of the selected practice
-      selected_practice_postcode <- dbGetQuery(con, sprintf("
-                                                            SELECT postcode 
-                                                            FROM address 
-                                                            WHERE practiceid = '%s'", selected_practice_id))$postcode
+    # Fetch the postcode of the selected practice
+    selected_practice_postcode <- dbGetQuery(con, sprintf("
+                                                          SELECT postcode 
+                                                          FROM address 
+                                                          WHERE practiceid = '%s'", selected_practice_id))$postcode
       
-      # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
-      combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
+    # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
+    combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
       
-    }
   } else {
     cat("No practices found with a similar postcode.\n")
   }
@@ -384,16 +389,21 @@ if (nrow(practices) == 0) {
   combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
   
 } else {
-  cat("\nMultiple practices found for the provided postcode. Please select one from the list below:\n")
-  for (i in 1:nrow(practices)) {
-    cat(sprintf("%d: %s\n", i, practices$street[i]))
-  }
-  selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select: "))
+    cat("\nMultiple practices found for the provided postcode. Please select one from the list below:\n")
+    repeat {
+      for (i in 1:nrow(practices)) {
+        cat(sprintf("%d: %s\n", i, practices$street[i]))
+      }
+      selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select: "))
+      
+      # Validate the selection
+      if (selection >= 1 && selection <= nrow(practices)) {
+        break
+      } else {
+        cat("Invalid selection. Please try again.\n \n")
+      }
+    }
   
-  # Validate the selection
-  if (selection < 1 || selection > nrow(practices)) {
-    cat("Invalid selection.\n")
-  } else {
     selected_practice_id <- practices$practiceid[selection]
     selected_practice_name <- practices$street[selection]
     cat(sprintf("\nSelected practice: %s. Please wait a few seconds...\n", selected_practice_name))
@@ -404,7 +414,5 @@ if (nrow(practices) == 0) {
     # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
     combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
   }
-}
-
 
 dbDisconnect(con)
