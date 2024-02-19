@@ -326,93 +326,254 @@ combined_drug_hypertension_obesity_data <- function(con, selected_practice_postc
   visualize_obesity_comparison(con, selected_practice_id, practice_size)
 }
 
+# Function for Q1.1: User selection of a GP practice
+select_gp_info<- function(){
+  repeat{
+    # Prompt the user to enter a postcode
+    user_postcode_raw <- readline(prompt = "Enter the postcode of the GP of interest: ")
+    
+    # Convert postcode to upper case
+    user_postcode <- toupper(user_postcode_raw)
+    
+    # Fetch practice(s) by postcode
+    practices <- query_practices_by_postcode(user_postcode)
+    
+    # Check if multiple practices are found
+    # If no practices are found
+    if (nrow(practices) == 0) {
+      
+      # Fetch similar practices based on first four characters of the postcode
+      similar_practices <- query_similar_practices(user_postcode)
+      cat("No practices found for the provided postcode. Finding practices with a similar postcode...\n")
+      # If there are 1 or more practices found: 
+      if (nrow(similar_practices) > 0) {
+        repeat{
+          for (i in 1:nrow(similar_practices)) {
+            cat(sprintf("%d. %s\n", i, similar_practices$street[i]))
+          }
+          selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select and press Enter: "))
+          
+          if (selection >= 1 && selection <= nrow(similar_practices)) {
+            break
+          } else {
+            cat("Invalid selection. Please try again.\n \n")
+          }
+        }
+        
+        selected_practice_id <- similar_practices$practiceid[selection]
+        selected_practice_name <- similar_practices$street[selection]
+        cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+        
+        # Fetch the postcode of the selected practice
+        selected_practice_postcode <- dbGetQuery(con, sprintf("
+                                                          SELECT postcode 
+                                                          FROM address 
+                                                          WHERE practiceid = '%s'", selected_practice_id))$postcode
+        
+        # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
+        combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
+        
+      } else {
+        cat("No practices found with a similar postcode.\n")
+      }
+    } else if (nrow(practices) == 1) {
+      # Fetch the postcode of the selected practice
+      selected_practice_id <- practices$practiceid[1]
+      selected_practice_name <- practices$street[1]
+      cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+      selected_practice_postcode <- dbGetQuery(con, sprintf("
+                                                            SELECT postcode 
+                                                            FROM address 
+                                                            WHERE practiceid = '%s'", selected_practice_id))$postcode
+      
+      # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
+      combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
+      
+    } else {
+      cat("\nMultiple practices found for the provided postcode. Please select one from the list below:\n")
+      repeat {
+        for (i in 1:nrow(practices)) {
+          cat(sprintf("%d: %s\n", i, practices$street[i]))
+        }
+        selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select: "))
+        
+        # Validate the selection
+        if (selection >= 1 && selection <= nrow(practices)) {
+          break
+        } else {
+          cat("Invalid selection. Please try again.\n \n")
+        }
+      }
+      
+      selected_practice_id <- practices$practiceid[selection]
+      selected_practice_name <- practices$street[selection]
+      cat(sprintf("\nSelected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+      
+      # Fetch the postcode of the selected practice
+      selected_practice_postcode <- dbGetQuery(con, sprintf("SELECT postcode FROM address WHERE practiceid = '%s'", selected_practice_id))$postcode
+      
+      # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
+      combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
+    }
+    
+    # After fetching and displaying the information, prompt for next action
+    cat("\nSelect the number of an option below and press Enter:\n",
+        "1. Look up information for another practice\n",
+        "2. Return to main menu\n")
+    next_action <- as.integer(readline(prompt = "Your choice: "))
+    
+    if (next_action == 2) {
+      break  # Exit the repeat loop to return to the main menu
+    } else if (next_action != 1) {
+      cat("Invalid selection. Returning to main menu.\n")
+      break
+    }
+  }
+}
+
 ###### PROGRAM ######
 
 # Introduction to the GP Drug Finder Program
 
-
-# Prompt the user to enter a postcode
-user_postcode <- readline(prompt = "Enter the postcode of the GP of interest: ")
-
-# Fetch practice(s) by postcode
-practices <- query_practices_by_postcode(user_postcode)
-
-# Check if multiple practices are found
-# If no practices are found
-if (nrow(practices) == 0) {
+main_menu <- function() {
+  cat("
+                                                     
+  Welcome to the GP Drug Finder Program!
+  =====================================
   
-  # Fetch similar practices based on first four characters of the postcode
-  similar_practices <- query_similar_practices(user_postcode)
-  cat("No practices found for the provided postcode. Finding practices with a similar postcode...\n")
-  # If there are 1 or more practices found: 
-  if (nrow(similar_practices) > 0) {
-    repeat{
-      for (i in 1:nrow(similar_practices)) {
-        cat(sprintf("%d. %s\n", i, similar_practices$street[i]))
-      }
-      selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select and press Enter: "))
-      
-      if (selection >= 1 && selection <= nrow(similar_practices)) {
-        break
-      } else {
-        cat("Invalid selection. Please try again.\n \n")
-      }
-    }
+  Menu:
+  1. Select a GP for prescription, hypertension, and obesity information
+  2. Select a drug for hypertension and obesity information
+  3. Select a location
+  4. Exit
+  ")
+  
+  choice <- as.integer(readline(prompt = "Your choice: "))
+  
+  if (!is.na(choice)) {
+    switch(choice,
+           { # Option 1
+             
+             select_gp_info()  # Call your function for option 1
+           },
+           { # Option 2
+             cat("You selected option 2\n")
+             obesity_query <- "
+                              WITH metformin_prescriptions AS (
+                                SELECT practiceid, SUM(items) AS total_metformin_items
+                                FROM gp_data_up_to_2015
+                                WHERE bnfname LIKE 'Metformin%'
+                                GROUP BY practiceid
+                              ),
+                              obesity_rates AS (
+                                SELECT orgcode, AVG(ratio) * 100 AS obesity_rate
+                                FROM qof_achievement
+                                WHERE indicator = 'OB001W'
+                                GROUP BY orgcode
+                              )
+                              SELECT m.practiceid, m.total_metformin_items, o.obesity_rate
+                              FROM metformin_prescriptions AS m
+                              JOIN obesity_rates AS o ON m.practiceid = o.orgcode
+                              ORDER BY m.total_metformin_items DESC, o.obesity_rate DESC;"
     
-    selected_practice_id <- similar_practices$practiceid[selection]
-    selected_practice_name <- similar_practices$street[selection]
-    cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
-      
-    # Fetch the postcode of the selected practice
-    selected_practice_postcode <- dbGetQuery(con, sprintf("
-                                                          SELECT postcode 
-                                                          FROM address 
-                                                          WHERE practiceid = '%s'", selected_practice_id))$postcode
-      
-    # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
-    combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
-      
+            
+             hypertension_query <- "
+                                    WITH metformin_prescriptions AS (
+                                      SELECT practiceid, SUM(items) AS total_metformin_items
+                                      FROM gp_data_up_to_2015
+                                      WHERE bnfname LIKE 'Metformin%'
+                                      GROUP BY practiceid
+                                    ),
+                                    hypertension_rates AS (
+                                      SELECT orgcode, AVG(ratio) * 100 AS hypertension_rate
+                                      FROM qof_achievement
+                                      WHERE indicator IN ('HYP001', 'HYP006')
+                                      GROUP BY orgcode
+                                    )
+                                    SELECT m.practiceid, m.total_metformin_items, h.hypertension_rate
+                                    FROM metformin_prescriptions AS m
+                                    JOIN hypertension_rates AS h ON m.practiceid = h.orgcode
+                                    ORDER BY m.total_metformin_items DESC, h.hypertension_rate DESC;"
+            
+             diabetes_query <- "
+                                WITH metformin_prescriptions AS (
+                                      SELECT practiceid, SUM(items) AS total_metformin_items
+                                      FROM gp_data_up_to_2015
+                                      WHERE bnfname LIKE 'Metformin%'
+                                      GROUP BY practiceid
+                                    ),
+                                    diabetes_rates AS (
+                                      SELECT orgcode, AVG(ratio) * 100 AS diabetes_rate
+                                      FROM qof_achievement
+                                      WHERE indicator = 'DM001'
+                                      GROUP BY orgcode
+                                    )
+                                    SELECT m.practiceid, m.total_metformin_items, d.diabetes_rate
+                                    FROM metformin_prescriptions AS m
+                                    JOIN diabetes_rates AS d ON m.practiceid = d.orgcode
+                                    ORDER BY m.total_metformin_items DESC, d.diabetes_rate DESC;"
+             
+            # Execute queries
+            obesity_data <- dbGetQuery(con, obesity_query)
+            hypertension_data <- dbGetQuery(con, hypertension_query)
+            diabetes_data <- dbGetQuery(con, diabetes_query)
+            
+            # Spearman rank correlation test for obesity
+            spearman_test_obesity <- cor.test(obesity_data$total_metformin_items, obesity_data$obesity_rate, method = "spearman")
+            
+            print(spearman_test_obesity)
+            
+            # Spearman rank correlation test for hypertension
+            spearman_test_hypertension <- cor.test(hypertension_data$total_metformin_items, hypertension_data$hypertension_rate, method = "spearman")
+            
+            print(spearman_test_hypertension)
+            
+            # Plot for obesity data
+            print(
+              ggplot(obesity_data, aes(x = total_metformin_items, y = obesity_rate)) +
+              geom_point() +
+              geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
+              labs(title = "Scatter Plot of Metformin Prescriptions vs. Obesity Rate",
+                   x = "Total Metformin Items",
+                   y = "Obesity Rate (%)") +
+              theme_minimal()
+            )
+            
+            # Plot for hypertension data
+            print(
+              ggplot(hypertension_data, aes(x = total_metformin_items, y = hypertension_rate)) +
+              geom_point() +
+              geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
+              labs(title = "Scatter Plot of Metformin Prescriptions vs. Hypertension Rate",
+                   x = "Total Metformin Items",
+                   y = "Hypertension Rate (%)") +
+              theme_minimal()
+            )
+    
+           },
+           { # Option 3
+             cat("You selected option 3\n")
+             # Placeholder for option 3 functionality
+           },
+           { # Option 4
+             cat("Thank you for using the GP Finder. Exiting program...\n")
+             return(FALSE) # Indicate to exit the program
+           },
+           { # Default case for unexpected values
+             cat("Invalid selection. Please try again.\n")
+             return(TRUE)
+           })
+    return(TRUE)
   } else {
-    cat("No practices found with a similar postcode.\n")
+    cat("Invalid input. Please enter a number.\n")
+    return(TRUE)
   }
-} else if (nrow(practices) == 1) {
-  # Fetch the postcode of the selected practice
-  selected_practice_id <- practices$practiceid[1]
-  selected_practice_name <- practices$street[1]
-  cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
-  selected_practice_postcode <- dbGetQuery(con, sprintf("
-                                                            SELECT postcode 
-                                                            FROM address 
-                                                            WHERE practiceid = '%s'", selected_practice_id))$postcode
-  
-  # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
-  combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
-  
-} else {
-    cat("\nMultiple practices found for the provided postcode. Please select one from the list below:\n")
-    repeat {
-      for (i in 1:nrow(practices)) {
-        cat(sprintf("%d: %s\n", i, practices$street[i]))
-      }
-      selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select: "))
-      
-      # Validate the selection
-      if (selection >= 1 && selection <= nrow(practices)) {
-        break
-      } else {
-        cat("Invalid selection. Please try again.\n \n")
-      }
-    }
-  
-    selected_practice_id <- practices$practiceid[selection]
-    selected_practice_name <- practices$street[selection]
-    cat(sprintf("\nSelected practice: %s. Please wait a few seconds...\n", selected_practice_name))
-    
-    # Fetch the postcode of the selected practice
-    selected_practice_postcode <- dbGetQuery(con, sprintf("SELECT postcode FROM address WHERE practiceid = '%s'", selected_practice_id))$postcode
-    
-    # Execute combined function for top 10 drugs, top 5 drug categories, hypertension & obesity data
-    combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
-  }
+}
+
+# Main loop to show the menu repeatedly
+repeat {
+  should_continue <- main_menu()
+  if (!should_continue) break
+}
 
 dbDisconnect(con)
