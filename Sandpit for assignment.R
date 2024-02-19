@@ -431,6 +431,38 @@ select_gp_info<- function(){
   }
 }
 
+# Function to interpret correlation results
+interpret_correlation <- function(cor_test_result) {
+  # Determine the strength of the correlation based on the absolute value of the correlation coefficient
+  cor_strength <- abs(cor_test_result$estimate)
+  cor_significance <- cor_test_result$p.value
+  
+  # Define thresholds for the strength of correlation
+  strength <- ifelse(cor_strength < 0.1, "very weak",
+                     ifelse(cor_strength < 0.3, "weak",
+                            ifelse(cor_strength < 0.5, "moderate",
+                                   "strong")))
+  
+  # Determine if the correlation is significant
+  significance <- ifelse(cor_significance < 0.05, "statistically significant", "not statistically significant")
+  
+  # Return the interpretation
+  return(paste("The correlation is", strength, "and", significance, "."))
+}
+
+# Function to display end-of-operation choices and handle user selection
+end_of_operation_choice <- function() {
+  cat("
+  Please make a selection:
+  =======================
+  1. Return to Main Menu
+  2. Exit
+  ")
+  
+  choice <- as.integer(readline(prompt = "Your choice: "))
+  return(choice)
+}
+
 ###### PROGRAM ######
 
 # Introduction to the GP Drug Finder Program
@@ -438,10 +470,11 @@ select_gp_info<- function(){
 main_menu <- function() {
   cat("
                                                      
-  Welcome to the GP Drug Finder Program!
-  =====================================
+  Welcome to the GP Researcher Program!
+  ====================================
   
-  Menu:
+  Main Menu:
+  =========
   1. Select a GP for prescription, hypertension, and obesity information
   2. Select a drug for hypertension and obesity information
   3. Select a location
@@ -458,6 +491,7 @@ main_menu <- function() {
            },
            { # Option 2
              cat("You selected option 2\n")
+             cat("Please wait a few seconds...\n")
              obesity_query <- "
                               WITH metformin_prescriptions AS (
                                 SELECT practiceid, SUM(items) AS total_metformin_items
@@ -519,14 +553,32 @@ main_menu <- function() {
             diabetes_data <- dbGetQuery(con, diabetes_query)
             
             # Spearman rank correlation test for obesity
-            spearman_test_obesity <- cor.test(obesity_data$total_metformin_items, obesity_data$obesity_rate, method = "spearman")
+            kendall_test_obesity <- cor.test(obesity_data$total_metformin_items, obesity_data$obesity_rate, method = "kendall")
             
-            print(spearman_test_obesity)
+            print(kendall_test_obesity)
             
             # Spearman rank correlation test for hypertension
-            spearman_test_hypertension <- cor.test(hypertension_data$total_metformin_items, hypertension_data$hypertension_rate, method = "spearman")
+            kendall_test_hypertension <- cor.test(hypertension_data$total_metformin_items, hypertension_data$hypertension_rate, method = "kendall")
             
-            print(spearman_test_hypertension)
+            print(kendall_test_hypertension)
+            
+            # Apply the function to obesity and hypertension correlation results
+            obesity_interpretation <- interpret_correlation(kendall_test_obesity)
+            hypertension_interpretation <- interpret_correlation(kendall_test_hypertension)
+            
+            # Print the interpretations
+            cat("Summary information:\n===================\n \n")
+            cat("Obesity and Metformin:", obesity_interpretation, "\n \n")
+            cat("Hypertension and Metformin:", hypertension_interpretation, "\n \n")
+            
+            # Compare the two correlations and print a statement about which is stronger
+            if (abs(kendall_test_obesity$estimate) > abs(kendall_test_hypertension$estimate)) {
+              cat("The relationship between Metformin and Obesity is stronger than the relationship between Metformin and Hypertension.\n")
+            } else if (abs(kendall_test_obesity$estimate) < abs(kendall_test_hypertension$estimate)) {
+              cat("The relationship between Metformin and Hypertension is stronger than the relationship between Metformin and Obesity.\n")
+            } else {
+              cat("The relationship between Metformin and Obesity is as strong as the relationship between Metformin and Hypertension.\n")
+            }
             
             # Plot for obesity data
             print(
@@ -549,6 +601,22 @@ main_menu <- function() {
                    y = "Hypertension Rate (%)") +
               theme_minimal()
             )
+            
+            # Provide user with choice to exit or return to Main Menu
+            user_choice <- end_of_operation_choice()
+            
+            # Handle the user's choice
+            if (user_choice == 1) {
+              # Return to main menu by breaking out of the current function and returning to the main loop
+              return(TRUE)
+            } else if (user_choice == 2) {
+              # Exit the program by returning FALSE, which will break the main loop
+              cat("Thank you for using the GP Finder. Exiting program...\n")
+              return(FALSE)
+            } else {
+              cat("Invalid choice. Returning to the main menu.\n")
+              return(TRUE)
+            }
     
            },
            { # Option 3
@@ -557,7 +625,7 @@ main_menu <- function() {
            },
            { # Option 4
              cat("Thank you for using the GP Finder. Exiting program...\n")
-             return(FALSE) # Indicate to exit the program
+             return(FALSE)
            },
            { # Default case for unexpected values
              cat("Invalid selection. Please try again.\n")
