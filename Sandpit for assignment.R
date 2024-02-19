@@ -417,10 +417,14 @@ select_gp_info<- function(){
     }
     
     # After fetching and displaying the information, prompt for next action
-    cat("\nSelect the number of an option below and press Enter:\n",
-        "1. Look up information for another practice\n",
-        "2. Return to main menu\n")
-    next_action <- as.integer(readline(prompt = "Your choice: "))
+    cat("
+  Please make a selection:
+  =======================
+  1. Select another practice
+  2. Return to Main Menu
+  ")
+
+    next_action <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
     
     if (next_action == 2) {
       break  # Exit the repeat loop to return to the main menu
@@ -459,8 +463,180 @@ end_of_operation_choice <- function() {
   2. Exit
   ")
   
-  choice <- as.integer(readline(prompt = "Your choice: "))
+  choice <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
   return(choice)
+}
+
+# Function to allow the user to select a diabetic drug vs hypertension/obesity rates 
+select_diabetic_drug_info <- function() {
+  
+  # Query to get a list of diabetic drugs
+  diabetic_drugs_query <- "
+                                        SELECT bnfchemical, MIN(chemicaldesc) AS chemicaldesc
+                                        FROM bnf
+                                        WHERE bnfsection = '601'
+                                        AND chemicaldesc NOT LIKE '%/%'
+                                        AND LOWER(chemicaldesc) NOT LIKE '%test%'
+                                        AND LOWER(chemicaldesc) NOT LIKE '%other%'
+                                        GROUP BY bnfchemical
+                                        ORDER BY bnfchemical;
+                                      "
+  
+  # Execute the query to get the list
+  diabetic_drugs <- dbGetQuery(con, diabetic_drugs_query)
+  
+  # Display the list of drugs to the user
+  cat("Please select the number of the drug from the list below and press Enter:\n========================================================================\n")
+  for (i in 1:nrow(diabetic_drugs)) {
+    cat(sprintf("%d: %s\n", i, diabetic_drugs$chemicaldesc[i]))
+  }
+  
+  # Get the user's choice
+  drug_choice <- as.integer(readline(prompt = "Enter the number of the drug you want to select and press Enter: "))
+  
+  # Check if the choice is valid
+  if (drug_choice < 1 || drug_choice > nrow(diabetic_drugs)) {
+    cat("Invalid selection. Please try again.\n")
+    return(TRUE) # Return to the main menu
+  }
+  
+  cat("Performing analysis. This may take a few moments...")
+  
+  # Get the selected drug's chemical
+  selected_drug_chemical <- diabetic_drugs$bnfchemical[drug_choice]
+  
+  # Save the drug name for future use
+  selected_drug_name <- trimws(diabetic_drugs$chemicaldesc[drug_choice])
+  
+  # Obesity query with the user's selected drug
+  prescription_query <- sprintf("
+                                WITH drug_prescriptions AS (
+                                  SELECT gp.practiceid, SUM(gp.items) AS total_drug_items
+                                  FROM gp_data_up_to_2015 gp
+                                  INNER JOIN bnf ON SUBSTRING(gp.bnfcode, 1, 8) = SUBSTRING('%s', 1, 8)
+                                  GROUP BY gp.practiceid
+                                ),
+                                obesity_rates AS (
+                                  SELECT orgcode, AVG(ratio) * 100 AS obesity_rate
+                                  FROM qof_achievement
+                                  WHERE indicator = 'OB001W'
+                                  GROUP BY orgcode
+                                )
+                                SELECT d.practiceid, d.total_drug_items, o.obesity_rate
+                                FROM drug_prescriptions d
+                                JOIN obesity_rates o ON d.practiceid = o.orgcode
+                            ", selected_drug_chemical);
+  
+  # Similar query for hypertension rates, using the first 8 characters
+  hypertension_query <- sprintf("
+                                WITH drug_prescriptions AS (
+                                  SELECT gp.practiceid, SUM(gp.items) AS total_drug_items
+                                  FROM gp_data_up_to_2015 gp
+                                  INNER JOIN bnf ON SUBSTRING(gp.bnfcode, 1, 8) = SUBSTRING('%s', 1, 8)
+                                  GROUP BY gp.practiceid
+                                ),
+                                hypertension_rates AS (
+                                  SELECT orgcode, AVG(ratio) * 100 AS hypertension_rate
+                                  FROM qof_achievement
+                                  WHERE indicator IN ('HYP001', 'HYP006')
+                                  GROUP BY orgcode
+                                )
+                                SELECT d.practiceid, d.total_drug_items, h.hypertension_rate
+                                FROM drug_prescriptions d
+                                JOIN hypertension_rates h ON d.practiceid = h.orgcode
+                            ", selected_drug_chemical);
+  
+  # Execute queries
+  obesity_data <- dbGetQuery(con, prescription_query)
+  hypertension_data <- dbGetQuery(con, hypertension_query)
+  
+  # Initialize correlation test results to NULL
+  kendall_test_drug_obesity <- NULL
+  kendall_test_drug_hypertension <- NULL
+  
+  # Kendall correlation test for obesity
+  if (nrow(obesity_data) > 1 && sum(!is.na(obesity_data$total_drug_items)) > 1 && sum(!is.na(obesity_data$obesity_rate)) > 1) {
+    kendall_test_drug_obesity <- cor.test(obesity_data$total_drug_items, obesity_data$obesity_rate, method = "kendall")
+    print(kendall_test_drug_obesity)
+  } else {
+    cat("Not enough data for obesity correlation test.\n")
+  }
+  
+  # Kendall correlation test for hypertension
+  if (nrow(hypertension_data) > 1 && sum(!is.na(hypertension_data$total_drug_items)) > 1 && sum(!is.na(hypertension_data$hypertension_rate)) > 1) {
+    kendall_test_drug_hypertension <- cor.test(hypertension_data$total_drug_items, hypertension_data$hypertension_rate, method = "kendall")
+    print(kendall_test_drug_hypertension)
+  } else {
+    cat("Not enough data for hypertension correlation test.\n")
+  }
+  
+  # Check if correlation tests were performed and interpret results if they were
+  if (!is.null(kendall_test_drug_obesity)) {
+    obesity_interpretation <- interpret_correlation(kendall_test_drug_obesity)
+    cat(sprintf("Obesity and %s: %s\n \n", selected_drug_name, obesity_interpretation))
+  } else {
+    cat("Obesity data not sufficient for correlation test.\n \n")
+  }
+  
+  if (!is.null(kendall_test_drug_hypertension)) {
+    hypertension_interpretation <- interpret_correlation(kendall_test_drug_hypertension)
+    cat(sprintf("Hypertension and %s: %s\n \n", selected_drug_name, hypertension_interpretation))
+  } else {
+    cat("Hypertension data not sufficient for correlation test.\n \n")
+  }
+  
+  # Only compare correlations if both tests were performed
+  if (!is.null(kendall_test_drug_obesity) && !is.null(kendall_test_drug_hypertension)) {
+    # Compare the two correlations and print a statement about which is stronger
+    if (abs(kendall_test_drug_obesity$estimate) > abs(kendall_test_drug_hypertension$estimate)) {
+      cat(sprintf("The relationship between %s and Obesity is stronger than the relationship between %s and Hypertension.\n", selected_drug_name, selected_drug_name))
+    } else if (abs(kendall_test_drug_obesity$estimate) < abs(kendall_test_drug_hypertension$estimate)) {
+      cat(sprintf("The relationship between %s and Hypertension is stronger than the relationship between %s and Obesity.\n", selected_drug_name, selected_drug_name))
+    } else {
+      cat(sprintf("The relationship between %s and Obesity is as strong as the relationship between %s and Hypertension.\n", selected_drug_name, selected_drug_name))
+    }
+  } else {
+    cat("Insufficient data for comparing correlations.\n")
+  }
+  
+  # Plot for obesity data
+  print(
+    ggplot(obesity_data, aes(x = total_drug_items, y = obesity_rate)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
+      labs(title = sprintf("Scatter Plot of %s Prescriptions vs. Obesity Rate", selected_drug_name),
+           x = sprintf("Total %s Items", selected_drug_name),
+           y = "Obesity Rate (%)") +
+      theme_minimal()
+  )
+  
+  # Plot for hypertension data
+  print(
+    ggplot(hypertension_data, aes(x = total_drug_items, y = hypertension_rate)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
+      labs(title = sprintf("Scatter Plot of %s Prescriptions vs. Hypertension Rate", selected_drug_name),
+           x = sprintf("Total %s Items", selected_drug_name),
+           y = "Hypertension Rate (%)") +
+      theme_minimal()
+  )
+  
+  # Provide user with choice to exit or return to Main Menu
+  user_choice <- end_of_operation_choice()
+  
+  # Handle the user's choice
+  if (user_choice == 1) {
+    # Return to main menu by breaking out of the current function and returning to the main loop
+    return(TRUE)
+  } else if (user_choice == 2) {
+    # Exit the program by returning FALSE, which will break the main loop
+    cat("Thank you for using the GP Researcher. Exiting program...\n")
+    return(FALSE)
+  } else {
+    cat("Invalid choice. Returning to the main menu.\n")
+    return(TRUE)
+  }
+  
 }
 
 ###### PROGRAM ######
@@ -470,28 +646,31 @@ end_of_operation_choice <- function() {
 main_menu <- function() {
   cat("
                                                      
-  Welcome to the GP Researcher Program!
+  Welcome to the GP Researcher program!
   ====================================
   
   Main Menu:
   =========
   1. Select a GP for prescription, hypertension, and obesity information
-  2. Select a drug for hypertension and obesity information
-  3. Select a location
-  4. Exit
+  2. Compare Metformin prescription rates with hypertension and obesity rates
+  3. Select a diabetic drug to compare with hypertension and obesity rates
+  4. Placeholder
+  5. Exit
   ")
   
-  choice <- as.integer(readline(prompt = "Your choice: "))
+  choice <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
   
   if (!is.na(choice)) {
     switch(choice,
            { # Option 1
-             
-             select_gp_info()  # Call your function for option 1
+             cat("You selected option 1\n")
+             cat("Please wait a few seconds...\n")
+             select_gp_info()
            },
            { # Option 2
              cat("You selected option 2\n")
              cat("Please wait a few seconds...\n")
+             
              obesity_query <- "
                               WITH metformin_prescriptions AS (
                                 SELECT practiceid, SUM(items) AS total_metformin_items
@@ -510,7 +689,6 @@ main_menu <- function() {
                               JOIN obesity_rates AS o ON m.practiceid = o.orgcode
                               ORDER BY m.total_metformin_items DESC, o.obesity_rate DESC;"
     
-            
              hypertension_query <- "
                                     WITH metformin_prescriptions AS (
                                       SELECT practiceid, SUM(items) AS total_metformin_items
@@ -528,43 +706,24 @@ main_menu <- function() {
                                     FROM metformin_prescriptions AS m
                                     JOIN hypertension_rates AS h ON m.practiceid = h.orgcode
                                     ORDER BY m.total_metformin_items DESC, h.hypertension_rate DESC;"
-            
-             diabetes_query <- "
-                                WITH metformin_prescriptions AS (
-                                      SELECT practiceid, SUM(items) AS total_metformin_items
-                                      FROM gp_data_up_to_2015
-                                      WHERE bnfname LIKE 'Metformin%'
-                                      GROUP BY practiceid
-                                    ),
-                                    diabetes_rates AS (
-                                      SELECT orgcode, AVG(ratio) * 100 AS diabetes_rate
-                                      FROM qof_achievement
-                                      WHERE indicator = 'DM001'
-                                      GROUP BY orgcode
-                                    )
-                                    SELECT m.practiceid, m.total_metformin_items, d.diabetes_rate
-                                    FROM metformin_prescriptions AS m
-                                    JOIN diabetes_rates AS d ON m.practiceid = d.orgcode
-                                    ORDER BY m.total_metformin_items DESC, d.diabetes_rate DESC;"
              
             # Execute queries
             obesity_data <- dbGetQuery(con, obesity_query)
             hypertension_data <- dbGetQuery(con, hypertension_query)
-            diabetes_data <- dbGetQuery(con, diabetes_query)
+
+            # Kendall correlation test for obesity
+            kendall_test_metformin_obesity <- cor.test(obesity_data$total_metformin_items, obesity_data$obesity_rate, method = "kendall")
             
-            # Spearman rank correlation test for obesity
-            kendall_test_obesity <- cor.test(obesity_data$total_metformin_items, obesity_data$obesity_rate, method = "kendall")
+            print(kendall_test_metformin_obesity)
             
-            print(kendall_test_obesity)
+            # Kendall correlation test for hypertension
+            kendall_test_metformin_hypertension <- cor.test(hypertension_data$total_metformin_items, hypertension_data$hypertension_rate, method = "kendall")
             
-            # Spearman rank correlation test for hypertension
-            kendall_test_hypertension <- cor.test(hypertension_data$total_metformin_items, hypertension_data$hypertension_rate, method = "kendall")
-            
-            print(kendall_test_hypertension)
+            print(kendall_test_metformin_hypertension)
             
             # Apply the function to obesity and hypertension correlation results
-            obesity_interpretation <- interpret_correlation(kendall_test_obesity)
-            hypertension_interpretation <- interpret_correlation(kendall_test_hypertension)
+            obesity_interpretation <- interpret_correlation(kendall_test_metformin_obesity)
+            hypertension_interpretation <- interpret_correlation(kendall_test_metformin_hypertension)
             
             # Print the interpretations
             cat("Summary information:\n===================\n \n")
@@ -572,9 +731,9 @@ main_menu <- function() {
             cat("Hypertension and Metformin:", hypertension_interpretation, "\n \n")
             
             # Compare the two correlations and print a statement about which is stronger
-            if (abs(kendall_test_obesity$estimate) > abs(kendall_test_hypertension$estimate)) {
+            if (abs(kendall_test_metformin_obesity$estimate) > abs(kendall_test_metformin_hypertension$estimate)) {
               cat("The relationship between Metformin and Obesity is stronger than the relationship between Metformin and Hypertension.\n")
-            } else if (abs(kendall_test_obesity$estimate) < abs(kendall_test_hypertension$estimate)) {
+            } else if (abs(kendall_test_metformin_obesity$estimate) < abs(kendall_test_metformin_hypertension$estimate)) {
               cat("The relationship between Metformin and Hypertension is stronger than the relationship between Metformin and Obesity.\n")
             } else {
               cat("The relationship between Metformin and Obesity is as strong as the relationship between Metformin and Hypertension.\n")
@@ -611,7 +770,7 @@ main_menu <- function() {
               return(TRUE)
             } else if (user_choice == 2) {
               # Exit the program by returning FALSE, which will break the main loop
-              cat("Thank you for using the GP Finder. Exiting program...\n")
+              cat("Thank you for using the GP Researcher. Exiting program...\n")
               return(FALSE)
             } else {
               cat("Invalid choice. Returning to the main menu.\n")
@@ -621,10 +780,18 @@ main_menu <- function() {
            },
            { # Option 3
              cat("You selected option 3\n")
-             # Placeholder for option 3 functionality
+             cat("Please wait a few seconds...\n")
+             
+             select_diabetic_drug_info()
+             
            },
            { # Option 4
-             cat("Thank you for using the GP Finder. Exiting program...\n")
+             cat("You selected option 4\n")
+             cat("Please wait a few seconds...\n \n")
+             # Current placeholder for Part 2 of Assignment
+           },
+           { # Option 5
+             cat("Thank you for using the GP Researcher. Exiting program...\n")
              return(FALSE)
            },
            { # Default case for unexpected values
