@@ -2,6 +2,11 @@ library(RPostgreSQL)
 library(DBI)
 library(ggplot2)
 library(dplyr)
+library(tidyr)
+
+
+# Global variable to control the main loop
+.keep_running <- TRUE
 
 # Establish database connection
 drv <- dbDriver('PostgreSQL')
@@ -454,6 +459,19 @@ interpret_correlation <- function(cor_test_result) {
   return(paste("The correlation is", strength, "and", significance, "."))
 }
 
+# Function to print drug columns side by side
+print_drug_options <- function(first_col, second_col) {
+  max_length <- max(nchar(first_col), nchar(second_col))
+  for (i in seq_along(first_col)) {
+    # Prepare first column entry
+    first_entry <- first_col[i]
+    # Check if there's a corresponding second column entry
+    second_entry <- if (i <= length(second_col)) second_col[i] else ""
+    # Print the line with both entries
+    cat(sprintf("%-*s %s\n", max_length + 4, first_entry, second_entry))
+  }
+}
+
 # Function to display end-of-operation choices and handle user selection
 end_of_operation_choice <- function() {
   cat("
@@ -464,6 +482,11 @@ end_of_operation_choice <- function() {
   ")
   
   choice <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
+  
+  if (choice == 2) {
+    .GlobalEnv$.keep_running <- FALSE
+  }
+  
   return(choice)
 }
 
@@ -485,11 +508,25 @@ select_diabetic_drug_info <- function() {
   # Execute the query to get the list
   diabetic_drugs <- dbGetQuery(con, diabetic_drugs_query)
   
+  # Add an index column to diabetic_drugs for easier reference
+  diabetic_drugs$Index <- seq_len(nrow(diabetic_drugs))
+  
+  # Index and drug description column
+  diabetic_drugs$IndexDesc <- paste(diabetic_drugs$Index, ": ", diabetic_drugs$chemicaldesc)
+  
+  # Define the split row
+  split_row <- 29
+  
+  # Create two vectors for the two columns
+  first_col <- diabetic_drugs$IndexDesc[1:split_row]
+  second_col <- diabetic_drugs$IndexDesc[(split_row + 1):nrow(diabetic_drugs)]
+  
+  # Combine the two columns. Since we're not padding, no need to adjust for length differences
+  combined_cols <- list(first_col, second_col)
+  
   # Display the list of drugs to the user
   cat("Please select the number of the drug from the list below and press Enter:\n========================================================================\n")
-  for (i in 1:nrow(diabetic_drugs)) {
-    cat(sprintf("%d: %s\n", i, diabetic_drugs$chemicaldesc[i]))
-  }
+  print_drug_options(first_col, second_col)
   
   # Get the user's choice
   drug_choice <- as.integer(readline(prompt = "Enter the number of the drug you want to select and press Enter: "))
@@ -500,7 +537,7 @@ select_diabetic_drug_info <- function() {
     return(TRUE) # Return to the main menu
   }
   
-  cat("Performing analysis. This may take a few moments...")
+  cat("Performing analysis. This may take a few moments...\n \n")
   
   # Get the selected drug's chemical
   selected_drug_chemical <- diabetic_drugs$bnfchemical[drug_choice]
@@ -570,6 +607,8 @@ select_diabetic_drug_info <- function() {
     cat("Not enough data for hypertension correlation test.\n")
   }
   
+  cat("Summary information:\n===================\n \n")
+  
   # Check if correlation tests were performed and interpret results if they were
   if (!is.null(kendall_test_drug_obesity)) {
     obesity_interpretation <- interpret_correlation(kendall_test_drug_obesity)
@@ -630,7 +669,7 @@ select_diabetic_drug_info <- function() {
     return(TRUE)
   } else if (user_choice == 2) {
     # Exit the program by returning FALSE, which will break the main loop
-    cat("Thank you for using the GP Researcher. Exiting program...\n")
+    cat("Exiting program...\n")
     return(FALSE)
   } else {
     cat("Invalid choice. Returning to the main menu.\n")
@@ -664,12 +703,12 @@ main_menu <- function() {
     switch(choice,
            { # Option 1
              cat("You selected option 1\n")
-             cat("Please wait a few seconds...\n")
+             cat("Please wait a few seconds...\n \n")
              select_gp_info()
            },
            { # Option 2
              cat("You selected option 2\n")
-             cat("Please wait a few seconds...\n")
+             cat("Please wait a few seconds...\n \n")
              
              obesity_query <- "
                               WITH metformin_prescriptions AS (
@@ -766,11 +805,11 @@ main_menu <- function() {
             
             # Handle the user's choice
             if (user_choice == 1) {
-              # Return to main menu by breaking out of the current function and returning to the main loop
+              # Return to Main Menu
               return(TRUE)
             } else if (user_choice == 2) {
               # Exit the program by returning FALSE, which will break the main loop
-              cat("Thank you for using the GP Researcher. Exiting program...\n")
+              cat("Exiting program...\n")
               return(FALSE)
             } else {
               cat("Invalid choice. Returning to the main menu.\n")
@@ -780,7 +819,7 @@ main_menu <- function() {
            },
            { # Option 3
              cat("You selected option 3\n")
-             cat("Please wait a few seconds...\n")
+             cat("Please wait a few seconds...\n \n")
              
              select_diabetic_drug_info()
              
@@ -791,7 +830,7 @@ main_menu <- function() {
              # Current placeholder for Part 2 of Assignment
            },
            { # Option 5
-             cat("Thank you for using the GP Researcher. Exiting program...\n")
+             cat("Exiting program...\n")
              return(FALSE)
            },
            { # Default case for unexpected values
@@ -805,10 +844,20 @@ main_menu <- function() {
   }
 }
 
-# Main loop to show the menu repeatedly
+# Main loop
 repeat {
+  if (!.keep_running) {
+    cat("Exiting program...\n")
+    break
+  }
+  
   should_continue <- main_menu()
-  if (!should_continue) break
+  if (!should_continue || !.keep_running) {
+    cat("Thank you for using the GP Researcher program! Goodbye.\n")
+    break
+  }
 }
 
+# Disconnect from the database
 dbDisconnect(con)
+
