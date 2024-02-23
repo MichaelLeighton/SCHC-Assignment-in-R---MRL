@@ -1,8 +1,11 @@
 library(RPostgreSQL)
 library(DBI)
 library(ggplot2)
+library(sf) # May not need this
 library(dplyr)
 library(tidyr)
+library(patchwork) # May not need this
+library(scales) # for percentage display in 2.1 function
 
 
 # Global variable to control the main loop
@@ -66,6 +69,7 @@ calculate_median_threshold <- function(con) {
 
 # Function to define size of practice
 define_practice_size_by_median <- function(con, practice_id) {
+  # Median threshold was chosen to account for data that is not normally distributed, as a mean threshold would skew.
   # Dynamically calculate the median threshold
   median_threshold <- calculate_median_threshold(con)
   
@@ -141,7 +145,7 @@ fetch_hypertension_rate_specific <- function(con, practice_id) {
   query <- sprintf("
     SELECT indicator, AVG(ratio) * 100 AS percentage
     FROM qof_achievement
-    WHERE orgcode = '%s' AND indicator IN ('HYP001', 'HYP006')
+    WHERE orgcode = '%s' AND indicator = 'HYP001'
     GROUP BY indicator", practice_id)
   data <- dbGetQuery(con, query)
   return(data)
@@ -150,9 +154,9 @@ fetch_hypertension_rate_specific <- function(con, practice_id) {
 # Function to calculate mean hypertension rate for all practices in Wales
 fetch_mean_hypertension_rate_wales <- function(con) {
   query <- "
-    SELECT indicator, AVG(ratio) * 100 AS percentage
+    SELECT 'HYP001' AS indicator, AVG(ratio) * 100 AS percentage
     FROM qof_achievement
-    WHERE indicator IN ('HYP001', 'HYP006')
+    WHERE indicator = 'HYP001'
     GROUP BY indicator"
   data <- dbGetQuery(con, query)
   return(data)
@@ -172,9 +176,9 @@ fetch_mean_hypertension_rate_same_size <- function(con, practice_size) {
     filter(size_category == practice_size) %>% 
     .$practiceid
   query <- sprintf("
-    SELECT indicator, AVG(ratio) * 100 AS percentage
+    SELECT 'HYP001' AS indicator, AVG(ratio) * 100 AS percentage
     FROM qof_achievement
-    WHERE indicator IN ('HYP001', 'HYP006') AND orgcode IN ('%s')
+    WHERE indicator = 'HYP001' AND orgcode IN ('%s')
     GROUP BY indicator", paste(same_size_practices, collapse="','"))
   same_size_data <- dbGetQuery(con, query)
   return(same_size_data)
@@ -210,7 +214,7 @@ visualize_hypertension_comparison <- function(con, selected_practice_id, practic
   
   cat("\nComparison of Hypertension Rate:\n===============================\n")
   print(combined_data)
-  cat("\nDefinitions:\n===========\nHYP001: The contractor establishes and maintains a register of patients with established hypertension.\nHYP006: The percentage of patients with hypertension in whom the last blood pressure reading (measured in the preceding 12 months) is 150/90 mmHg or less.\n")
+  cat("\nDefinitions:\n===========\nHYP001: The contractor establishes and maintains a register of patients with established hypertension.\n")
   
   # Visualize the data
   print(
@@ -490,7 +494,116 @@ end_of_operation_choice <- function() {
   return(choice)
 }
 
-# Function to allow the user to select a diabetic drug vs hypertension/obesity rates 
+# Function for Q1.2: Comparing metformin with hypertension/obesity rates
+select_metformin_drug_info <- function() {
+  obesity_query <- "
+                              WITH metformin_prescriptions AS (
+                                SELECT practiceid, SUM(items) AS total_metformin_items
+                                FROM gp_data_up_to_2015
+                                WHERE bnfname LIKE 'Metformin%'
+                                GROUP BY practiceid
+                              ),
+                              obesity_rates AS (
+                                SELECT orgcode, AVG(ratio) * 100 AS obesity_rate
+                                FROM qof_achievement
+                                WHERE indicator = 'OB001W'
+                                GROUP BY orgcode
+                              )
+                              SELECT m.practiceid, m.total_metformin_items, o.obesity_rate
+                              FROM metformin_prescriptions AS m
+                              JOIN obesity_rates AS o ON m.practiceid = o.orgcode
+                              ORDER BY m.total_metformin_items DESC, o.obesity_rate DESC;"
+  
+  hypertension_query <- "
+                                    WITH metformin_prescriptions AS (
+                                      SELECT practiceid, SUM(items) AS total_metformin_items
+                                      FROM gp_data_up_to_2015
+                                      WHERE bnfname LIKE 'Metformin%'
+                                      GROUP BY practiceid
+                                    ),
+                                    hypertension_rates AS (
+                                      SELECT orgcode, AVG(ratio) * 100 AS hypertension_rate
+                                      FROM qof_achievement
+                                      WHERE indicator = 'HYP001'
+                                      GROUP BY orgcode
+                                    )
+                                    SELECT m.practiceid, m.total_metformin_items, h.hypertension_rate
+                                    FROM metformin_prescriptions AS m
+                                    JOIN hypertension_rates AS h ON m.practiceid = h.orgcode
+                                    ORDER BY m.total_metformin_items DESC, h.hypertension_rate DESC;"
+  
+  # Execute queries
+  obesity_data <- dbGetQuery(con, obesity_query)
+  hypertension_data <- dbGetQuery(con, hypertension_query)
+  
+  # Kendall correlation test for obesity
+  kendall_test_metformin_obesity <- cor.test(obesity_data$total_metformin_items, obesity_data$obesity_rate, method = "kendall")
+  
+  print(kendall_test_metformin_obesity)
+  
+  # Kendall correlation test for hypertension
+  kendall_test_metformin_hypertension <- cor.test(hypertension_data$total_metformin_items, hypertension_data$hypertension_rate, method = "kendall")
+  
+  print(kendall_test_metformin_hypertension)
+  
+  # Apply the function to obesity and hypertension correlation results
+  obesity_interpretation <- interpret_correlation(kendall_test_metformin_obesity)
+  hypertension_interpretation <- interpret_correlation(kendall_test_metformin_hypertension)
+  
+  # Print the interpretations
+  cat("Summary information:\n===================\n \n")
+  cat("Obesity and Metformin:", obesity_interpretation, "\n \n")
+  cat("Hypertension and Metformin:", hypertension_interpretation, "\n \n")
+  
+  # Compare the two correlations and print a statement about which is stronger
+  if (abs(kendall_test_metformin_obesity$estimate) > abs(kendall_test_metformin_hypertension$estimate)) {
+    cat("The relationship between Metformin and Obesity is stronger than the relationship between Metformin and Hypertension.\n")
+  } else if (abs(kendall_test_metformin_obesity$estimate) < abs(kendall_test_metformin_hypertension$estimate)) {
+    cat("The relationship between Metformin and Hypertension is stronger than the relationship between Metformin and Obesity.\n")
+  } else {
+    cat("The relationship between Metformin and Obesity is as strong as the relationship between Metformin and Hypertension.\n")
+  }
+  
+  # Plot for obesity data
+  print(
+    ggplot(obesity_data, aes(x = total_metformin_items, y = obesity_rate)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
+      labs(title = "Scatter Plot of Metformin Prescriptions vs. Obesity Rate",
+           x = "Total Metformin Items",
+           y = "Obesity Rate (%)") +
+      theme_minimal()
+  )
+  
+  # Plot for hypertension data
+  print(
+    ggplot(hypertension_data, aes(x = total_metformin_items, y = hypertension_rate)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
+      labs(title = "Scatter Plot of Metformin Prescriptions vs. Hypertension Rate",
+           x = "Total Metformin Items",
+           y = "Hypertension Rate (%)") +
+      theme_minimal()
+  )
+  
+  # Provide user with choice to exit or return to Main Menu
+  user_choice <- end_of_operation_choice()
+  
+  # Handle the user's choice
+  if (user_choice == 1) {
+    # Return to Main Menu
+    return(TRUE)
+  } else if (user_choice == 2) {
+    # Exit the program by returning FALSE, which will break the main loop
+    cat("Exiting program...\n")
+    return(FALSE)
+  } else {
+    cat("Invalid choice. Returning to the main menu.\n")
+    return(TRUE)
+  }
+}
+
+# Function for Q1.3: allow the user to select a diabetic drug vs hypertension/obesity rates 
 select_diabetic_drug_info <- function() {
   
   # Query to get a list of diabetic drugs
@@ -575,7 +688,7 @@ select_diabetic_drug_info <- function() {
                                 hypertension_rates AS (
                                   SELECT orgcode, AVG(ratio) * 100 AS hypertension_rate
                                   FROM qof_achievement
-                                  WHERE indicator IN ('HYP001', 'HYP006')
+                                  WHERE indicator = 'HYP001'
                                   GROUP BY orgcode
                                 )
                                 SELECT d.practiceid, d.total_drug_items, h.hypertension_rate
@@ -609,7 +722,7 @@ select_diabetic_drug_info <- function() {
   
   cat("Summary information:\n===================\n \n")
   
-  # Check if correlation tests were performed and interpret results if they were
+  # Check if correlation tests were performed and interpret results
   if (!is.null(kendall_test_drug_obesity)) {
     obesity_interpretation <- interpret_correlation(kendall_test_drug_obesity)
     cat(sprintf("Obesity and %s: %s\n \n", selected_drug_name, obesity_interpretation))
@@ -678,6 +791,441 @@ select_diabetic_drug_info <- function() {
   
 }
 
+# Function to standardize county
+standardize_county <- function(county, posttown) {
+  
+  # NOTE: I wanted to average centiles by each of the 22 counties but this proved much more difficult than anticipated. There seems to be no strict naming convention for 'county' in the database with seemingly random switches between counties and preserved counties, the latter of which contain multiple counties. I attempted to organise by postcode, but due to many counties sharing postcode prefixes, this complicated things further. I therefore manually matched keywords in the posttown column to the counties, as they frequently had a clearer indication of the correct county and there were only ~450 rows of data for practices with CHD001 records. I tried defining vectors with each of the 22 counties then combining each into a single named vector so I had 44 lines of code instead of 190 to tidy up the code, but unfortunately it was altering the average centile too much. This was far less neat than I intended, and wanted to avoid so many manual alterations as it renders the function less dynamic, but after many iterations it was the best compromise I could come up with.
+  
+  # Convert posttown to county to handle those with inconsistent 'county' columns
+  posttown_to_county <- c(
+    "56 - 58 HIGH STREET" = "Rhondda Cynon Taf",
+    "ABERCARN" = "Caerphilly", 
+    "ABERCYNON" = "Rhondda Cynon Taf", 
+    "ABERDARE" = "Rhondda Cynon Taf",
+    "ABERFAN" = "Merthyr Tydfil",
+    "ABERGAVENNY" = "Monmouthshire",
+    "ABERGELE" = "Conwy",
+    "ABERTARE" = "Rhondda Cynon Taf", 
+    "ABERTILLERY" = "Blaenau Gwent",
+    "ABERYSTWYTH" = "Ceredigion",
+    "ALLTAMI ROAD" = "Flintshire",
+    "ANGLESEY" = "Isle of Anglesey",
+    "BALA" = "Gwynedd",
+    "BANGOR" = "Gwynedd",
+    "BARGOED" = "Monmouthshire", 
+    "BARMOUTH" = "Gwynedd",
+    "BARRY" = "Vale of Glamorgan",
+    "BENNLECH" = "Isle of Anglesey",
+    "BETHESDA" = "Gwynedd",
+    "BETWS Y COED" = "Conwy",
+    "BISHOPS WALK" = "Denbighshire",
+    "BLACKWOOD" = "Caerphilly",
+    "BLAENAU FFESTINIOG" = "Gwynedd",
+    "BLAENAVON" = "Torfaen",
+    "BLAINA" = "Blaenau Gwent",
+    "BORTH" = "Ceredigion",
+    "BRECON" = "Powys",
+    "BRIDGEND" = "Bridgend", 
+    "BRITON FERRY" = "Neath Port Talbot",
+    "BROAD SHROAD COWBRIDGE" = "Vale of Glamorgan",
+    "BRUNEL WAY" = "Neath Port Talbot",
+    "BRYNHYFRYD" = "Swansea",
+    "BRYNMAWR" = "Blaenau Gwent",
+    "BUILTH WELLS" = "Powys",
+    "BURRY PORT" = "Carmarthenshire",
+    "CAERGWRLE WREXHAM" = "Flintshire",
+    "CAERLEON" = "Newport",
+    "CAERNARFON" = "Gwynedd",
+    "CAERPHILLY" = "Caerphilly", 
+    "CALDICOT" = "Monmouthshire",
+    "CARDIFF" = "Cardiff", 
+    "CARMARTHEN" = "Carmarthenshire",
+    "CEREDIGION" = "Ceredigion",
+    "CHEPSTOW" = "Monmouthshire",
+    "CHESTER" = "Flintshire",
+    "CHURCH VILLAGE" = "Rhondda Cynon Taf",
+    "CLYDACH" = "Swansea",
+    "COEDPOETH" = "Wrexham",
+    "COLWYN" = "Denbighshire",
+    "CONNAHS QUAY" = "Flintshire",
+    "CONWAY" = "Conwy",
+    "CONWY" = "Conwy",
+    "CORWEN" = "Denbighshire",
+    "COTTRELL STREET" = "Merthyr Tydfil",
+    "COWBRIDGE ROAD" = "Cardiff",
+    "COWBRIDGE" = "Vale of Glamorgan",
+    "CRUMLIN" = "Caerphilly",
+    "CRYMYCH" = "Pembrokeshire",
+    "CWMBRAN" = "Torfaen",
+    "CWMLLYNFELL" = "Neath Port Talbot",
+    "DEESIDE" = "Flintshire",
+    "DENBIGH" = "Denbighshire",
+    "DINAS POWYS" = "Vale of Glamorgan",
+    "DOLGELLAU" = "Gwynedd",
+    "EBBW" = "Blaenau Gwent",
+    "FFORESTFACH" = "Swansea",
+    "FLINTSHIRE" = "Flintshire",
+    "GABALFA" = "Cardiff",
+    "GAERWEN" = "Isle of Anglesey",
+    "GELLIGAER" = "Caerphilly",
+    "GLANRAFON" = "Flintshire",
+    "GOODWICK" = "Pembrokeshire",
+    "GRANGETOWN" = "Cardiff",
+    "GURWEN" = "Neath Port Talbot",
+    "GWENT" = "Blaenau Gwent",
+    "GWYNEDD" = "Gwynedd",
+    "GYFFIN" = "Conwy",
+    "HAVERFORDWEST" = "Pembrokeshire",
+    "HAWARDEN" = "Flintshire",
+    "HIGHTOWN" = "Wrexham",
+    "HOLYHEAD" = "Isle of Anglesey",
+    "HOLYWELL" = "Flintshire",
+    "HOPE WREXHAM" = "Flintshire",
+    "KINMEL BAY RHYL" = "Denbighshire",
+    "KNIGHTON" = "Powys",
+    "LAMPETER" = "Ceredigion",
+    "LANGDON" = "Swansea",
+    "LLANBERIS" = "Gwynedd",
+    "LLANDEILO" = "Carmarthenshire",
+    "LLANDRINDOD WELLS" = "Powys",
+    "LLANDUDNO" = "Conwy",
+    "LLANELLI" = "Carmarthenshire",
+    "LLANFAIRFECHAN" = "Conwy",
+    "LLANFYLLIN" = "Powys",
+    "LLANGOLLEN" = "Denbighshire",
+    "LLANHILLETH" = "Blaenau Gwent",
+    "LLANIDLOES" = "Powys",
+    "LLANRWST" = "Conwy",
+    "LLANSAMLET" = "Swansea",
+    "LLANTRISANT" = "Rhondda Cynon Taf", 
+    "LLANTWIT" = "Vale of Glamorgan",
+    "LLWYNHENDY" = "Carmarthenshire",
+    "MACHYNLLETH" = "Powys",
+    "MAESTEG" = "Bridgend",
+    "MANCHESTER SQUARE" = "Pembrokeshire",
+    "MANSELTON" = "Swansea",
+    "MERTHYR TYDFIL" = "Merthyr Tydfil",
+    "MID GLAMORGAN" = "Rhondda Cynon Taf",
+    "MILFORD" = "Pembrokeshire",
+    "MIN Y NANT" = "Powys",
+    "MOLD" = "Flintshire",
+    "MONMOUTH" = "Monmouthshire",
+    "MONTGOMERY" = "Powys",
+    "MORRISTON" = "Swansea",
+    "MOUNTAIN ASH" = "Rhondda Cynon Taf", 
+    "NEATH" = "Neath Port Talbot",
+    "NEFYN" = "Gwynedd",
+    "NELSON" = "Caerphilly", 
+    "NEW TREDEGAR" = "Caerphilly",
+    "NEWBRIDGE" = "Caerphilly",
+    "NEWPORT" = "Newport",
+    "NEWTOWN" = "Powys",
+    "NEYLAND" = "Pembrokeshire",
+    "OLD COLWYN" = "Conwy",
+    "OVERTON ON DEE" = "Wrexham",
+    "PEMBROKE" ="Pembrokeshire",
+    "PENCLAWDD" = "Swansea",
+    "PENCOED" = "Bridgend",
+    "PENGAM GREEN" = "Cardiff",
+    "PENRHYNDEUDRAETH" = "Gwynedd",
+    "PENYGRAIG PORTH" = "Rhondda Cynon Taf", 
+    "PENYGROES" = "Gwynedd",
+    "PLAS IONA" = "Cardiff",
+    "PONTYCLUN" = "Rhondda Cynon Taf", 
+    "PONTYPOOL" = "Torfaen",
+    "PONTYPRIDD" = "Rhondda Cynon Taf",
+    "PORT TALBOT" = "Neath Port Talbot",
+    "PORTHMADOG" = "Gwynedd",
+    "POWYS" = "Powys",
+    "PRESTATYN" = "Denbighshire",
+    "PRESTEIGNE" = "Powys",
+    "PWLLHELI" = "Gwynedd",
+    "QUEENSFERRY" = "Flintshire",
+    "RAGLAN" = "Monmouthshire",
+    "RHAYADER" = "Powys",
+    "RHAYADER" = "Powys",
+    "RHONDDA" = "Rhondda Cynon Taf", 
+    "RHUDDLAN" = "Denbighshire",
+    "RHYL" = "Denbighshire",
+    "RHYMNEY" = "Caerphilly",
+    "RISCA" = "Caerphilly",
+    "RUMNEY" = "Cardiff",
+    "RUTHIN" = "Denbighshire",
+    "SAINT THOMAS GREEN" = "Pembrokeshire",
+    "SCHOOL ROAD" = "Wrexham",
+    "SCURLAGE" = "Swansea",
+    "SEVEN SISTERS" = "Neath Port Talbot",
+    "SINGLETON" = "Swansea",
+    "SPLOTT" = "Cardiff",
+    "ST ASAPH" = "Denbighshire",
+    "SULLY" = "Vale of Glamorgan",
+    "SWANSEA" = "Swansea",
+    "TAFFS WELL" = "Rhondda Cynon Taf",
+    "TALIESYN COURT" = "Ceredigion",
+    "TENBY" = "Pembrokeshire",
+    "THE OLD POLICE STATION TINTERN" = "Monmouthshire",
+    "THOMAS STREET" = "Carmarthenshire",
+    "TONYFELIN" = "Caerphilly",
+    "TONYPANDY" = "Rhondda Cynon Taf", 
+    "TONYREFAIL" = "Rhondda Cynon Taf", 
+    "TORFAEN" = "Torfaen",
+    "TREDEGAR" = "Blaenau Gwent",
+    "TREHARRIS" = "Merthyr Tydfil", 
+    "TROEDYRHIW" = "Merthyr Tydfil",
+    "TYNEWYDD" = "Rhondda Cynon Taf", 
+    "TYWYN" = "Gwynedd",
+    "UNIT 22 LAWN INDUSTRIAL ESTATE" = "Caerphilly",
+    "UPLANDS" = "Swansea",
+    "USK" = "Monmouthshire",
+    "VALE OF GLAMORGAN" = "Vale of Glamorgan",
+    "VALE" = "Glamorgan", 
+    "WELSHPOOL" = "Powys",
+    "WESTERN VALLEY RD ROGERSTONE" = "Newport",
+    "WHITE ROSE WAY" = "Caerphilly",
+    "WREXHAM" = "Wrexham",
+    "Y FELINHELI" = "Gwynedd",
+    "YNYS MON" = "Isle of Anglesey",
+    "YSTRAD MYNACH" = "Caerphilly",
+    "YSTRADGYNLAIS" = "Powys",
+    "YYNYSYBWL" = "Rhondda Cynon Taf"
+    
+  )
+  
+  # Convert posttown to lowercase for matching
+  posttown <- tolower(posttown)
+  
+  # Match posttown to the county
+  corrected_county <- county
+  for (town in names(posttown_to_county)) {
+    if (grepl(town, posttown, ignore.case = TRUE)) {
+      corrected_county <- posttown_to_county[town]
+      break
+    }
+  }
+  
+  # If Glamorgan is found and it's not Vale of Glamorgan, then use corrected county
+  if (grepl("glamorgan", county, ignore.case = TRUE) && !grepl("vale", county, ignore.case = TRUE)) {
+    return(corrected_county)
+  }
+  
+  # Handle other cases
+  return(case_when(
+    grepl("CWMBRAN", county, ignore.case = TRUE) ~ "Torfaen",
+    grepl("TORFAEN", county, ignore.case = TRUE) ~ "Torfaen",
+    grepl("PONTYPOOL", county, ignore.case = TRUE) ~ "Torfaen",
+    grepl("YSTRAD MYNACH", county, ignore.case = TRUE) ~ "Caerphilly",
+    grepl("ABERTILLERY", county, ignore.case = TRUE) ~ "Blaenau Gwent",
+    grepl("YNYS MON", county, ignore.case = TRUE) ~ "Isle of Anglesey",
+    grepl("PEMBROKESHIRE", county, ignore.case = TRUE) ~ "Pembrokeshire",
+    grepl("CONWY", county, ignore.case = TRUE) ~ "Conwy",
+    grepl("CONWAY", county, ignore.case = TRUE) ~ "Conwy",
+    grepl("MERTHYR TYDFIL", county, ignore.case = TRUE) ~ "Merthyr Tydfil",
+    grepl("POWYS", county, ignore.case = TRUE) ~ "Powys",
+    grepl("FLINTSHIRE", county, ignore.case = TRUE) ~ "Flintshire",
+    grepl("MOLD", county, ignore.case = TRUE) ~ "Flintshire",
+    grepl("NEW TREDEGAR", county, ignore.case = TRUE) ~ "Caerphilly",
+    grepl("TREDEGAR", county, ignore.case = TRUE) ~ "Blaenau Gwent",
+    grepl("CARDIFF", county, ignore.case = TRUE) ~ "Cardiff",
+    grepl("CHURCH VILLAGE", county, ignore.case = TRUE) ~ "Rhondda Cynon Taf",
+    grepl("PORT TALBOT", county, ignore.case = TRUE) ~ "Neath Port Talbot",
+    grepl("DENBIGH", county, ignore.case = TRUE) ~ "Denbighshire",
+    grepl("BORTH", county, ignore.case = TRUE) ~ "Ceredigion",
+    grepl("Ceredigion", county, ignore.case = TRUE) ~ "Ceredigion",
+    grepl("SWANSEA", county, ignore.case = TRUE) ~ "Swansea",
+    grepl("PRESTATYN", county, ignore.case = TRUE) ~ "Flintshire",
+    grepl("LLANELLI", county, ignore.case = TRUE) ~ "Carmarthenshire",
+    grepl("MAESTEG", county, ignore.case = TRUE) ~ "Bridgend",
+    grepl("HAVERFORDWEST", county, ignore.case = TRUE) ~ "Pembrokeshire",
+    grepl("LLANGOLLEN", county, ignore.case = TRUE) ~ "Denbighshire",
+    grepl("COLWYN", county, ignore.case = TRUE) ~ "Denbighshire",
+    grepl("CARMARTHEN", county, ignore.case = TRUE) ~ "Carmarthenshire",
+    grepl("RHYL", county, ignore.case = TRUE) ~ "Denbighshire",
+    grepl("PEMBROKE", county, ignore.case = TRUE) ~ "Pembrokeshire",
+    grepl("GWYNEDD", county, ignore.case = TRUE) ~ "Gwynedd",
+    grepl("ABERGELE", county, ignore.case = TRUE) ~ "Conwy",
+    grepl("BRITON FERRY", county, ignore.case = TRUE) ~ "Neath Port Talbot",
+    grepl("PONTYPRIDD", county, ignore.case = TRUE) ~ "Rhondda Cynon Taf",
+    grepl("PENCOED", county, ignore.case = TRUE) ~ "Bridgend",
+    grepl("MONMOUTHSHIRE", county, ignore.case = TRUE) ~ "Monmouthshire",
+    grepl("NEATH", county, ignore.case = TRUE) ~ "Neath Port Talbot",
+    grepl("BLACKWOOD", county, ignore.case = TRUE) ~ "Caerphilly",
+    grepl("CAERLEON", county, ignore.case = TRUE) ~ "Newport",
+    grepl("NEWPORT", county, ignore.case = TRUE) ~ "Newport",
+    grepl("LAMPETER", county, ignore.case = TRUE) ~ "Ceredigion",
+    grepl("CRYMYCH", county, ignore.case = TRUE) ~ "Pembrokeshire",
+    grepl("ABERFAN", county, ignore.case = TRUE) ~ "Merthyr Tydfil",
+    grepl("WREXHAM", county, ignore.case = TRUE) ~ "Wrexham",
+    grepl("HOLYHEAD", county, ignore.case = TRUE) ~ "Isle of Anglesey",
+    grepl("CHEPSTOW", county, ignore.case = TRUE) ~ "Monmouthshire",
+    grepl("RHYMNEY", county, ignore.case = TRUE) ~ "Caerphilly",
+    grepl("ANGLESEY", county, ignore.case = TRUE) ~ "Isle of Anglesey",
+    grepl("NEWBRIDGE", county, ignore.case = TRUE) ~ "Caerphilly",
+    grepl("DEESIDE", county, ignore.case = TRUE) ~ "Flintshire",
+    grepl("BRYNMAWR", county, ignore.case = TRUE) ~ "Blaenau Gwent",
+    grepl("Rhondda Cynon Taff", county, ignore.case = TRUE) ~ "Rhondda Cynon Taf",
+    grepl("MILFORD", county, ignore.case = TRUE) ~ "Pembrokeshire",
+    grepl("VALE OF GLAMORGAN", county, ignore.case = TRUE) ~ "Vale of Glamorgan",
+    grepl("BARRY", county, ignore.case = TRUE) ~ "Vale of Glamorgan",
+    grepl("SULLY", county, ignore.case = TRUE) ~ "Vale of Glamorgan",
+    grepl("FERNDALE", county, ignore.case = TRUE) ~ "Rhondda Cynon Taf",
+    
+    TRUE ~ as.character(county)
+  ))
+}
+
+# Function to assign practice to county
+assign_county <- function(postcode, county, posttown) {
+  
+  # Welsh county df
+  welsh_county_code <- c("W06000001", "W06000019", "W06000013", "W06000018", "W06000015", "W06000010", "W06000008", "W06000003", "W06000004", "W06000005", "W06000014", "W06000002", "W06000024", "W06000021", "W06000012", "W06000022", "W06000009", "W06000023", "W06000016", "W06000011", "W06000020", "W06000006")
+  welsh_county <- c("Isle of Anglesey", "Blaenau Gwent", "Bridgend", "Caerphilly", "Cardiff", "Carmarthenshire", "Ceredigion", "Conwy", "Denbighshire", "Flintshire", "Vale of Glamorgan", "Gwynedd", "Merthyr Tydfil", "Monmouthshire", "Neath Port Talbot", "Newport", "Pembrokeshire", "Powys", "Rhondda Cynon Taf", "Swansea", "Torfaen", "Wrexham")
+  welsh_postcode <- c("LL58|LL59|LL60|LL61|LL62|LL64|LL65|LL66|LL67|LL68|LL69|LL70|LL71|LL72|LL73|LL74|LL75|LL76|LL77|LL78", "NP2|NP3|NP23", "CF31|CF32|CF33|CF34|CF35|CF36", "CF46|CF81|CF82|CF83|NP11", "CF3|CF5|CF83", "SA4|SA14|SA15|SA16|SA17|SA18|SA19|SA20|SA31|SA32|SA33|SA34|SA38|SA39|SA40|SA44|SA48|SA66", "SA38|SA40|SA43|SA44|SA45|SA46|SA47|SA48|SY20|SY23|SY24|SY25", "LL16|LL21|LL22|LL24|LL25|LL26|LL27|LL28|LL29|LL30|LL31|LL32|LL33|LL34|LL57", "CH7|LL11|LL15|LL16|LL17|LL18|LL19|LL20|LL21|LL22", "CH1|CH4|CH5|CH6|CH7|CH8|LL11|LL12|LL18|LL19", "CF1|CF5|CF32|CF35|CF61|CF62|CF63|CF64|CF71", "LL21|LL23|LL33|LL35|LL36|LL37|LL38|LL39|LL40|LL41|LL42|LL43|LL44|LL45|LL46|LL47|LL48|LL49|LL51|LL52|LL53|LL54|LL55|LL57|SY20", "CF46|CF47|CF48", "NP4|NP6|NP7", "SA8|SA9|SA10|SA11|SA12|SA13|SA18", "CF3|NP1|NP2|NP3|NP10|NP19|NP20", "SA34|SA35|SA36|SA37|SA41|SA42|SA43|SA61|SA62|SA63|SA64|SA65|SA66|SA67|SA68|SA69|SA70|SA71|SA72|SA73", "CF44|CF48|HR3|HR5|LD1|LD2|LD3|LD4|LD5|LD6|LD7|LD8|NP7|NP8|SA9|SA10|SY5|SY10|SY15|SY16|SY17|SY18|SY19|SY20|SY21|SY22", "CF37|CF38|CF39|CF40|CF41|CF42|CF43|CF44|CF45|CF72", "SA1|SA2|SA3|SA4|SA5|SA6|SA7|SA18", "NP4|NP44", "LL11|LL12|LL13|LL14|LL20|SY13|SY14")
+  welsh_county_df <- data.frame(welsh_county_code, welsh_county, welsh_postcode, stringsAsFactors = FALSE)
+  
+  # Apply the standardized county function
+  standardized_county <- standardize_county(county, posttown)
+  
+  # If county was successfully standardized or for special cases
+  if (!is.na(standardized_county) && standardized_county != county) {
+    return(standardized_county)
+  }
+  
+  # For preserved counties, NULL values, or when standardized county is the same as input
+  postcode_prefix <- substr(postcode, 1, min(nchar(postcode), 4))
+  for (i in 1:nrow(welsh_county_df)) {
+    if (grepl(postcode_prefix, welsh_county_df$welsh_postcode[i])) {
+      return(welsh_county_df$welsh_county[i])
+    }
+  }
+  
+  return(NA)  # Return NA if no match is found or if none of the special conditions apply
+}
+
+# Function for Q2.1:
+county_performance_info <- function(){
+  # Welsh county codes
+  welsh_county_code <- c("W06000001", "W06000019", "W06000013", "W06000018", "W06000015", 
+                         "W06000010", "W06000008", "W06000003", "W06000004", "W06000005", 
+                         "W06000014", "W06000002", "W06000024", "W06000021", "W06000012", 
+                         "W06000022", "W06000009", "W06000023", "W06000016", "W06000011", 
+                         "W06000020", "W06000006")
+  
+  
+  
+  # County and centile query
+  query <- "
+            SELECT ad.county, ad.posttown, qa.centile
+            FROM address AS ad
+            JOIN qof_achievement AS qa ON ad.practiceid = qa.orgcode
+            WHERE qa.indicator = 'CHD001'
+            "
+  
+  # Execute query
+  county_centile_data <- dbGetQuery(con, query)
+  
+  # Standardize county names
+  county_centile_data$county <- mapply(standardize_county, county_centile_data$county, county_centile_data$posttown)
+  
+  # Aggregate centile scores by county
+  county_centile_data <- county_centile_data %>%
+    group_by(county) %>%
+    summarize(average_centile = mean(centile, na.rm = TRUE)) %>%
+    ungroup()
+  
+  # Read the Welsh county shapefile
+  welsh_shapefile_path <- "LAD_MAY_2021_UK_BFC.shp"
+  welsh_counties <- st_read(welsh_shapefile_path, quiet = TRUE)
+  
+  # Visualize only Welsh counties on the map
+  welsh_counties <- welsh_counties %>%
+    filter(LAD21CD %in% welsh_county_code)
+  
+  # Exclude specific non-Welsh counties
+  county_centile_data <- county_centile_data[!county_centile_data$county %in% c("GLOUCESTER", "SHROPSHIRE"), ]
+  
+  # Combine query data with shapefile data
+  combined_data <- welsh_counties %>%
+    left_join(county_centile_data, by = c("LAD21NM" = "county")) %>%
+    mutate(is_missing = is.na(average_centile))
+  
+  # Plot county centile data
+  plot1 <- ggplot(combined_data) +
+    geom_sf(aes(fill = average_centile), color = "white", size = 0.2) +
+    scale_fill_viridis_c(option = "C", direction = -1, na.value = "grey", end = 0.9, name = "Avg Centile Score") +
+    labs(title = "Average CHD Centile Scores by County in Wales") +
+    theme_void() + # This removes axis and grid
+    theme(legend.position = "bottom",
+          plot.title = element_text(hjust = 0.5),
+          legend.key.width = unit(2, 'cm')) # Adjust legend key size
+  
+  print(plot1)
+  
+  # Arrange centile scores by descending order
+  county_centile_data <- county_centile_data %>%
+    arrange(desc(average_centile)) 
+  
+  # Convert to percentages
+  county_centile_data$average_centile <- percent(county_centile_data$average_centile / 100)
+  
+  # Print centile scores
+  cat("Summary information:\n===================\n \n")
+  print(county_centile_data, n = Inf)
+  
+  # Take user back to Sub-Menu
+  cat("\nReturning to Performance and Spend Sub-Menu...\n")
+  select_efficiency_info()
+}
+
+# Function for Q2: 
+select_efficiency_info <- function() {
+  cat("
+    Performance and Spend Sub-Menu:
+    =====================================
+    1. Performance in managing coronary heart disease (CHD) by county
+    2. Analysis Option 2
+    3. Analysis Option 3
+    4. Analysis Option 4
+    5. Return to Main Menu
+    6. Exit
+  ")
+  
+  choice <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
+  
+  switch(choice,
+         { # Analysis Option 1
+           cat("Performing analysis. Please wait...\n \n")
+           # Call a function to perform this analysis
+           county_performance_info()
+         },
+         { # Analysis Option 2
+           cat("Performing analysis. Please wait...\n \n")
+           # Call a function to perform this analysis
+         },
+         { # Analysis Option 3
+           cat("Performing analysis. Please wait...\n \n")
+           # Call a function to perform this analysis
+         },
+         { # Analysis Option 4
+           cat("Performing analysis. Please wait...n \n")
+           # Call a function to perform this analysis
+         },
+         { # Return to Main Menu
+           cat("Returning to Main Menu...\n \n")
+           return(TRUE) # Use return value to control the main loop
+         },
+         { # Exit
+           .GlobalEnv$.keep_running <- FALSE # Set the global flag to FALSE to stop the program
+           cat("Exiting program...\n \n")
+           return(FALSE) # Use return value to control the main loop
+         },
+         { # Default case for unexpected values
+           cat("Invalid selection. Please try again.\n")
+           return(TRUE) # Stay in the sub-menu
+         }
+  )
+}
+
+
 ###### PROGRAM ######
 
 # Introduction to the GP Drug Finder Program
@@ -693,7 +1241,7 @@ main_menu <- function() {
   1. Select a GP for prescription, hypertension, and obesity information
   2. Compare Metformin prescription rates with hypertension and obesity rates
   3. Select a diabetic drug to compare with hypertension and obesity rates
-  4. Placeholder
+  4. Performance and Spend Sub-Menu
   5. Exit
   ")
   
@@ -709,125 +1257,18 @@ main_menu <- function() {
            { # Option 2
              cat("You selected option 2\n")
              cat("Please wait a few seconds...\n \n")
-             
-             obesity_query <- "
-                              WITH metformin_prescriptions AS (
-                                SELECT practiceid, SUM(items) AS total_metformin_items
-                                FROM gp_data_up_to_2015
-                                WHERE bnfname LIKE 'Metformin%'
-                                GROUP BY practiceid
-                              ),
-                              obesity_rates AS (
-                                SELECT orgcode, AVG(ratio) * 100 AS obesity_rate
-                                FROM qof_achievement
-                                WHERE indicator = 'OB001W'
-                                GROUP BY orgcode
-                              )
-                              SELECT m.practiceid, m.total_metformin_items, o.obesity_rate
-                              FROM metformin_prescriptions AS m
-                              JOIN obesity_rates AS o ON m.practiceid = o.orgcode
-                              ORDER BY m.total_metformin_items DESC, o.obesity_rate DESC;"
-    
-             hypertension_query <- "
-                                    WITH metformin_prescriptions AS (
-                                      SELECT practiceid, SUM(items) AS total_metformin_items
-                                      FROM gp_data_up_to_2015
-                                      WHERE bnfname LIKE 'Metformin%'
-                                      GROUP BY practiceid
-                                    ),
-                                    hypertension_rates AS (
-                                      SELECT orgcode, AVG(ratio) * 100 AS hypertension_rate
-                                      FROM qof_achievement
-                                      WHERE indicator IN ('HYP001', 'HYP006')
-                                      GROUP BY orgcode
-                                    )
-                                    SELECT m.practiceid, m.total_metformin_items, h.hypertension_rate
-                                    FROM metformin_prescriptions AS m
-                                    JOIN hypertension_rates AS h ON m.practiceid = h.orgcode
-                                    ORDER BY m.total_metformin_items DESC, h.hypertension_rate DESC;"
-             
-            # Execute queries
-            obesity_data <- dbGetQuery(con, obesity_query)
-            hypertension_data <- dbGetQuery(con, hypertension_query)
-
-            # Kendall correlation test for obesity
-            kendall_test_metformin_obesity <- cor.test(obesity_data$total_metformin_items, obesity_data$obesity_rate, method = "kendall")
-            
-            print(kendall_test_metformin_obesity)
-            
-            # Kendall correlation test for hypertension
-            kendall_test_metformin_hypertension <- cor.test(hypertension_data$total_metformin_items, hypertension_data$hypertension_rate, method = "kendall")
-            
-            print(kendall_test_metformin_hypertension)
-            
-            # Apply the function to obesity and hypertension correlation results
-            obesity_interpretation <- interpret_correlation(kendall_test_metformin_obesity)
-            hypertension_interpretation <- interpret_correlation(kendall_test_metformin_hypertension)
-            
-            # Print the interpretations
-            cat("Summary information:\n===================\n \n")
-            cat("Obesity and Metformin:", obesity_interpretation, "\n \n")
-            cat("Hypertension and Metformin:", hypertension_interpretation, "\n \n")
-            
-            # Compare the two correlations and print a statement about which is stronger
-            if (abs(kendall_test_metformin_obesity$estimate) > abs(kendall_test_metformin_hypertension$estimate)) {
-              cat("The relationship between Metformin and Obesity is stronger than the relationship between Metformin and Hypertension.\n")
-            } else if (abs(kendall_test_metformin_obesity$estimate) < abs(kendall_test_metformin_hypertension$estimate)) {
-              cat("The relationship between Metformin and Hypertension is stronger than the relationship between Metformin and Obesity.\n")
-            } else {
-              cat("The relationship between Metformin and Obesity is as strong as the relationship between Metformin and Hypertension.\n")
-            }
-            
-            # Plot for obesity data
-            print(
-              ggplot(obesity_data, aes(x = total_metformin_items, y = obesity_rate)) +
-              geom_point() +
-              geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
-              labs(title = "Scatter Plot of Metformin Prescriptions vs. Obesity Rate",
-                   x = "Total Metformin Items",
-                   y = "Obesity Rate (%)") +
-              theme_minimal()
-            )
-            
-            # Plot for hypertension data
-            print(
-              ggplot(hypertension_data, aes(x = total_metformin_items, y = hypertension_rate)) +
-              geom_point() +
-              geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue") +
-              labs(title = "Scatter Plot of Metformin Prescriptions vs. Hypertension Rate",
-                   x = "Total Metformin Items",
-                   y = "Hypertension Rate (%)") +
-              theme_minimal()
-            )
-            
-            # Provide user with choice to exit or return to Main Menu
-            user_choice <- end_of_operation_choice()
-            
-            # Handle the user's choice
-            if (user_choice == 1) {
-              # Return to Main Menu
-              return(TRUE)
-            } else if (user_choice == 2) {
-              # Exit the program by returning FALSE, which will break the main loop
-              cat("Exiting program...\n")
-              return(FALSE)
-            } else {
-              cat("Invalid choice. Returning to the main menu.\n")
-              return(TRUE)
-            }
-    
+             select_metformin_drug_info()
            },
            { # Option 3
              cat("You selected option 3\n")
              cat("Please wait a few seconds...\n \n")
-             
              select_diabetic_drug_info()
              
            },
            { # Option 4
              cat("You selected option 4\n")
              cat("Please wait a few seconds...\n \n")
-             # Current placeholder for Part 2 of Assignment
+             select_efficiency_info()
            },
            { # Option 5
              cat("Exiting program...\n")
