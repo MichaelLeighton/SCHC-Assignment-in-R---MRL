@@ -5,7 +5,8 @@ library(sf) # May not need this
 library(dplyr)
 library(tidyr)
 library(patchwork) # May not need this
-library(scales) # for percentage display in 2.1 function
+library(scales) # for percentage display in 2.1 function (NOTE: double check if I kept this)
+library(cluster) # For cluster analysis in 2.3 Spend (NOTE: double check if I kept this)
 
 
 # Global variable to control the main loop
@@ -794,8 +795,11 @@ select_diabetic_drug_info <- function() {
 # Function to standardize county
 standardize_county <- function(county, posttown) {
   
-  # NOTE: I wanted to average centiles by each of the 22 counties but this proved much more difficult than anticipated. There seems to be no strict naming convention for 'county' in the database with seemingly random switches between counties and preserved counties, the latter of which contain multiple counties. I attempted to organise by postcode, but due to many counties sharing postcode prefixes, this complicated things further. I therefore manually matched keywords in the posttown column to the counties, as they frequently had a clearer indication of the correct county and there were only ~450 rows of data for practices with CHD001 records. I tried defining vectors with each of the 22 counties then combining each into a single named vector so I had 44 lines of code instead of 190 to tidy up the code, but unfortunately it was altering the average centile too much. This was far less neat than I intended, and wanted to avoid so many manual alterations as it renders the function less dynamic, but after many iterations it was the best compromise I could come up with.
+  postcode_prefix_map <- list(
+    
+  )
   
+
   # Convert posttown to county to handle those with inconsistent 'county' columns
   posttown_to_county <- c(
     "56 - 58 HIGH STREET" = "Rhondda Cynon Taf",
@@ -1101,16 +1105,14 @@ assign_county <- function(postcode, county, posttown) {
   return(NA)  # Return NA if no match is found or if none of the special conditions apply
 }
 
-# Function for Q2.1:
-county_performance_info <- function(){
+# Function to retrieve county performance for CHD
+retrieve_county_performance_chd <- function() {
   # Welsh county codes
   welsh_county_code <- c("W06000001", "W06000019", "W06000013", "W06000018", "W06000015", 
                          "W06000010", "W06000008", "W06000003", "W06000004", "W06000005", 
                          "W06000014", "W06000002", "W06000024", "W06000021", "W06000012", 
                          "W06000022", "W06000009", "W06000023", "W06000016", "W06000011", 
                          "W06000020", "W06000006")
-  
-  
   
   # County and centile query
   query <- "
@@ -1148,6 +1150,11 @@ county_performance_info <- function(){
     left_join(county_centile_data, by = c("LAD21NM" = "county")) %>%
     mutate(is_missing = is.na(average_centile))
   
+  return(list(combined_data = combined_data, county_centile_data = county_centile_data))
+}
+
+# Function to plot county performance for CHD
+plot_county_performance_chd <- function(combined_data, county_centile_data) {
   # Plot county centile data
   plot1 <- ggplot(combined_data) +
     geom_sf(aes(fill = average_centile), color = "white", size = 0.2) +
@@ -1170,21 +1177,50 @@ county_performance_info <- function(){
   # Print centile scores
   cat("Summary information:\n===================\n \n")
   print(county_centile_data, n = Inf)
-  
-  # Take user back to Sub-Menu
-  cat("\nReturning to Performance and Spend Sub-Menu...\n")
-  select_efficiency_info()
 }
 
-# Function for Q2: 
+# Function to fetch chd data for a specific practice
+fetch_chd_rate_specific <- function(con, practice_id) {
+  query <- sprintf("
+    SELECT centile
+    FROM qof_achievement
+    WHERE orgcode = '%s' AND indicator = 'CHD001'
+    GROUP BY indicator", practice_id)
+  data <- dbGetQuery(con, query)
+  return(data)
+}
+
+# Function to fetch average CHD centile per county
+fetch_avg_chd_rate_county <- function(county_name){
+  
+}
+
+# Function to interpret cluster results
+interpret_clusters <- function(cluster_percentages, threshold) {
+  if (any(cluster_percentages > threshold)) {
+    interpretation <- cat("\nThere is a dominating cluster, indicating a specific strategy in treating CHD. This suggests little diversity in the management of this disease across practices.\n")
+  } else {
+    interpretation <- cat("\nThere is no dominating cluster, indicating that there is no universal strategy adopted in treating CHD. This suggests substantial diversity in the management of this disease across practices.\n")
+  }
+  return(interpretation)
+}
+  
+# Function for Q2 total: 
 select_efficiency_info <- function() {
   cat("
+  
+Coronary heart disease (CHD) is a chronic condition and one of the leading causes of death worldwide, resulting in thousands of hospitalizations in Wales per year. 
+
+One of the most common treatments for heart disease is the use of beta blockers, a preventative measure against myocardial infarction (MI). These block cell receptors that - if bound - would normally result in the release of hormones responsible for increasing heart rate and thereby potential health consequences.
+
+Use the menu options below to explore the data regarding CHD at practices across Wales.
+
     Performance and Spend Sub-Menu:
     =====================================
-    1. Performance in managing coronary heart disease (CHD) by county
-    2. Analysis Option 2
-    3. Analysis Option 3
-    4. Analysis Option 4
+    1. Management of CHD by county
+    2. Management of CHD by practice
+    3. Spend vs performance
+    4. Identify outliers
     5. Return to Main Menu
     6. Exit
   ")
@@ -1192,22 +1228,255 @@ select_efficiency_info <- function() {
   choice <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
   
   switch(choice,
-         { # Analysis Option 1
+         { # Option 1. Management of CHD by county
            cat("Performing analysis. Please wait...\n \n")
-           # Call a function to perform this analysis
-           county_performance_info()
+           
+           # Plot centile scores choropleth
+           county_performance_data_chd <- retrieve_county_performance_chd()
+           plot_county_performance_chd(county_performance_data_chd$combined_data, county_performance_data_chd$county_centile_data)
+           
          },
-         { # Analysis Option 2
+         { # Option 2. Management of CHD by practice
            cat("Performing analysis. Please wait...\n \n")
-           # Call a function to perform this analysis
+           # Prompt user to select practice to compare CHD to county
          },
-         { # Analysis Option 3
+         { # Option 3. Spend efficiency analysis
            cat("Performing analysis. Please wait...\n \n")
-           # Call a function to perform this analysis
+           
+           # Query to find the top 5 beta blockers by spend
+           top_beta_blockers_query <- "
+                                      SELECT bnfname, SUM(actcost) AS total_spend
+                                      FROM gp_data_up_to_2015
+                                      WHERE bnfcode LIKE '0204000%' 
+                                      GROUP BY bnfname
+                                      ORDER BY total_spend DESC
+                                      LIMIT 5;
+                                    "
+           
+           # Query to find the bottom 5 beta blockers by spend
+           bottom_beta_blockers_query <- "
+                                          SELECT bnfname, SUM(actcost) AS total_spend
+                                          FROM gp_data_up_to_2015
+                                          WHERE bnfcode LIKE '0204000%' 
+                                          GROUP BY bnfname
+                                          ORDER BY total_spend ASC
+                                          LIMIT 5;
+                                        "
+           
+           top_beta_blockers <- dbGetQuery(con, top_beta_blockers_query)
+           bottom_beta_blockers <- dbGetQuery(con, bottom_beta_blockers_query)
+           
+           # Print the results
+           colnames(top_beta_blockers) <- c('Drug Type', 'Total Spend (£)')
+           cat("\nTop 5 Beta Blockers by Spend:\n")
+           print(top_beta_blockers)
+           
+           colnames(bottom_beta_blockers) <- c('Drug Type', 'Total Spend (£)')
+           cat("\nBottom 5 Beta Blockers by Spend:\n")
+           print(bottom_beta_blockers)
+           
+           # Query relationship between beta blocker spend and CHD performance
+           cat("\nPerforming correlation analysis...\n")
+           query <- "
+                    SELECT 
+                        gp.practiceid,
+                        SUM(gp.actcost) AS total_spend_on_beta_blockers,
+                        q.centile AS performance_centile
+                    FROM 
+                        gp_data_up_to_2015 AS gp
+                    JOIN 
+                        qof_achievement AS q ON gp.practiceid = q.orgcode
+                    WHERE 
+                        gp.bnfcode LIKE '0204000%' AND
+                        q.indicator = 'CHD001'
+                    GROUP BY 
+                        gp.practiceid, q.centile
+                    "
+           
+           # Execute the query
+           data <- dbGetQuery(con, query)
+           
+           # Calculate Spearman's rank correlation for spend vs performance
+           kendall_chd_spend <- cor.test(data$total_spend_on_beta_blockers, data$performance_centile, method = "kendall")
+           
+           # Print the results
+           print(kendall_chd_spend)
+           
+           # Check if correlation tests were performed and interpret results
+           if (!is.null(kendall_chd_spend)) {
+             kendall_chd_spend_interpretation <- interpret_correlation(kendall_chd_spend)
+           } else {
+             cat("Spend data not sufficient for correlation test.\n \n")
+           }
+           
+           # Summary information
+           cat("Summary information:\n===================\n \n")
+           cat("Spend and CHD performance centile:", kendall_chd_spend_interpretation, "\n \n")
+
+           # Plot the results
+           print(
+             ggplot(data, aes(x = total_spend_on_beta_blockers, y = performance_centile)) +
+             geom_point(alpha = 0.6) +  
+             geom_smooth(method = "lm", formula = y ~ x, color = "blue", se = FALSE) +  
+             labs(title = "Relationship between Beta Blockers Spend and CHD Performance",
+                  x = "Total Spend on Beta Blockers (£)",
+                  y = "CHD Performance Centile") +
+             theme_minimal()
+           )
+           
          },
-         { # Analysis Option 4
-           cat("Performing analysis. Please wait...n \n")
-           # Call a function to perform this analysis
+         { # Option 4. Identify outliers
+           cat("Performing analysis. Please wait...\n")
+           
+           # Cluster analysis query
+           cat("\nPerforming cluster analysis...\n")
+           query <- "
+                    SELECT
+                    gp.practiceid,
+                    SUM(gp.actcost) AS total_spend_on_beta_blockers,
+                    SUM(gp.quantity) AS total_quantity_of_chd_medication,
+                    SUM(gp.items) AS number_of_chd_related_prescriptions,
+                    qof.centile AS performance_centile
+                FROM
+                    gp_data_up_to_2015 AS gp
+                JOIN
+                    qof_achievement AS qof ON gp.practiceid = qof.orgcode
+                WHERE
+                    gp.bnfcode LIKE '0204000%'
+                    AND qof.indicator = 'CHD001'
+                GROUP BY
+                    gp.practiceid, qof.centile"
+           
+           cluster_data <- dbGetQuery(con, query)
+           
+           # Normalize the data
+           data_normalized <- as.data.frame(scale(cluster_data[,c("total_spend_on_beta_blockers", "total_quantity_of_chd_medication", "number_of_chd_related_prescriptions", "performance_centile")]))
+           
+           # Perform k-means clustering with the chosen number of clusters, for example, k = 3
+           set.seed(100)  # Ensure reproducibility
+           k_means_result <- kmeans(data_normalized, centers = 3)
+           
+           # Attach cluster assignment to original data
+           cluster_data$cluster <- k_means_result$cluster
+           
+           # Analyze the clusters
+           cluster_data %>%
+             group_by(cluster) %>%
+             summarise(across(everything(), mean, na.rm = TRUE))
+           
+           # Summarize and print cluster data
+           cluster_summary <- cluster_data %>%
+             group_by(cluster) %>%
+             summarise(across(everything(), mean, na.rm = TRUE))
+           
+           cat("\n \n")
+           colnames(cluster_summary) <- c('Cluster', 'Practice ID', 'Total spend on beta blockers', 'Total quantity of CHD medication', 'Number of CHD-related prescriptions','Performance centile')
+           print(cluster_summary)
+           
+           # Scatter plot for spend vs. performance centile
+           print(
+             ggplot(cluster_data, aes(x = total_spend_on_beta_blockers, y = performance_centile, color = factor(cluster))) +
+               geom_point() +
+               labs(title = "Cluster Analysis: Spend vs. Performance Centile",
+                    x = "Total Spend on Beta-Blockers",
+                    y = "Performance Centile",
+                    color = "Cluster") +
+               theme_minimal()
+           )
+           
+           # Scatter plot for total quantity of CHD medication vs. performance centile
+           print(
+             ggplot(cluster_data, aes(x = total_quantity_of_chd_medication, y = performance_centile, color = factor(cluster))) +
+               geom_point() +
+               labs(title = "Cluster Analysis: Quantity of CHD medication vs. Performance Centile",
+                    x = "Total Quantity of CHD medication",
+                    y = "Performance Centile",
+                    color = "Cluster") +
+               theme_minimal()
+           )
+           
+           # Scatter plot for number of CHD-related prescriptions vs. performance centile
+           print(
+             ggplot(cluster_data, aes(x = number_of_chd_related_prescriptions, y = performance_centile, color = factor(cluster))) +
+               geom_point() +
+               labs(title = "Cluster Analysis: Number of CHD-related prescriptions vs. Performance Centile",
+                    x = "Number of CHD-related Prescriptions",
+                    y = "Performance Centile",
+                    color = "Cluster") +
+               theme_minimal()
+           )
+           
+           # Multidimensional scaling for cluster plot
+           mds <- cmdscale(dist(data_normalized), k = 2)  # k is the number of dimensions
+           
+           # Convert to a dataframe
+           mds_df <- as.data.frame(mds)
+           mds_df$cluster <- cluster_data$cluster
+           
+           # Plot
+           print(
+             ggplot(mds_df, aes(x = V1, y = V2, color = factor(cluster))) +
+               geom_point() +
+               labs(title = "Cluster Analysis: MDS Plot",
+                    x = "Dimension 1",
+                    y = "Dimension 2",
+                    color = "Cluster") +
+               theme_minimal()
+           )
+           
+           cat("\n \n")
+           # Summarize the cluster data
+           cluster_summary <- cluster_data %>%
+             group_by(cluster) %>%
+             summarise(
+               mean_spend = mean(total_spend_on_beta_blockers, na.rm = TRUE),
+               median_spend = median(total_spend_on_beta_blockers, na.rm = TRUE),
+               mean_performance_centile = mean(performance_centile, na.rm = TRUE),
+               median_performance_centile = median(performance_centile, na.rm = TRUE),
+               mean_quantity_chd_medication = mean(total_quantity_of_chd_medication, na.rm = TRUE),
+               median_quantity_chd_medication = median(total_quantity_of_chd_medication, na.rm = TRUE),
+               mean_number_prescriptions = mean(number_of_chd_related_prescriptions, na.rm = TRUE),
+               median_number_prescriptions = median(number_of_chd_related_prescriptions, na.rm = TRUE)
+             )
+           cat("\n \n")
+           colnames(cluster_summary) <- c('Cluster', 'Mean spend', 'Median spend', 'Mean performance centile', 'Median performance centile', 'Mean quantity CHD medication')
+           print(cluster_summary)
+           
+           
+           # Count the number of practices in each cluster and calculate the percentage of total practices
+           cluster_distribution <- cluster_data %>%
+             group_by(cluster) %>%
+             summarise(count = n()) %>%
+             mutate(percentage = (count / sum(count)) * 100)
+           
+           # Print the distribution
+           cat("\n \n")
+           colnames(cluster_distribution) <- c('Cluster', 'Total practices', '% of total practices')
+           print(cluster_distribution)
+           
+           # Define a threshold to interpret cluster results
+           dominating_cluster_threshold <- 50
+           
+           # Apply the cluster function to interpret the clusters
+           interpretation <- interpret_clusters(cluster_summary$cluster_percentage, dominating_cluster_threshold)
+           
+           # Print the interpretation
+           cat("\n \n")
+           print(interpretation)
+           
+           # Calculate correlations within each cluster
+           cluster_correlations <- cluster_data %>%
+             group_by(cluster) %>%
+             summarise(
+               spend_performance_correlation = cor(total_spend_on_beta_blockers, performance_centile, use = "complete.obs"),
+               spend_quantity_correlation = cor(total_spend_on_beta_blockers, total_quantity_of_chd_medication, use = "complete.obs"),
+               quantity_performance_correlation = cor(total_quantity_of_chd_medication, performance_centile, use = "complete.obs")
+             )
+           
+           # Print the correlations
+           cat("\n \n")
+           print(cluster_correlations)
+           
          },
          { # Return to Main Menu
            cat("Returning to Main Menu...\n \n")
