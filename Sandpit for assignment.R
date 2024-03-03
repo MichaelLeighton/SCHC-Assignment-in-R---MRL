@@ -1105,12 +1105,6 @@ assign_county <- function(postcode, county, posttown) {
 
 # Function to retrieve county performance for CHD
 retrieve_county_performance_chd <- function() {
-  # Welsh county codes
-  welsh_county_code <- c("W06000001", "W06000019", "W06000013", "W06000018", "W06000015", 
-                         "W06000010", "W06000008", "W06000003", "W06000004", "W06000005", 
-                         "W06000014", "W06000002", "W06000024", "W06000021", "W06000012", 
-                         "W06000022", "W06000009", "W06000023", "W06000016", "W06000011", 
-                         "W06000020", "W06000006")
   
   # County and centile query
   query <- "
@@ -1135,6 +1129,13 @@ retrieve_county_performance_chd <- function() {
   # Read the Welsh county shapefile
   welsh_shapefile_path <- "LAD_MAY_2021_UK_BFC.shp"
   welsh_counties <- st_read(welsh_shapefile_path, quiet = TRUE)
+  
+  # Welsh county codes
+  welsh_county_code <- c("W06000001", "W06000019", "W06000013", "W06000018", "W06000015", 
+                         "W06000010", "W06000008", "W06000003", "W06000004", "W06000005", 
+                         "W06000014", "W06000002", "W06000024", "W06000021", "W06000012", 
+                         "W06000022", "W06000009", "W06000023", "W06000016", "W06000011", 
+                         "W06000020", "W06000006")
   
   # Visualize only Welsh counties on the map
   welsh_counties <- welsh_counties %>%
@@ -1186,9 +1187,164 @@ fetch_chd_rate_specific <- function(con, practice_id) {
   return(data)
 }
 
-# Function to fetch average CHD centile per county
-fetch_avg_chd_rate_county <- function(county_name){
-  
+# Function for Q2.1
+select_gp_info_chd <- function(){
+  repeat{
+    # Prompt the user to enter a postcode
+    user_postcode_raw <- readline(prompt = "Enter the postcode of the GP of interest: ")
+    
+    # Convert postcode to upper case
+    user_postcode <- toupper(user_postcode_raw)
+    
+    # Fetch practice(s) by postcode
+    practices <- query_practices_by_postcode(user_postcode)
+    
+    # Check if multiple practices are found
+    # If no practices are found
+    if (nrow(practices) == 0) {
+      
+      # Fetch similar practices based on first four characters of the postcode
+      similar_practices <- query_similar_practices(user_postcode)
+      cat("No practices found for the provided postcode. Finding practices with a similar postcode...\n")
+      # If there are 1 or more practices found: 
+      if (nrow(similar_practices) > 0) {
+        repeat{
+          for (i in 1:nrow(similar_practices)) {
+            cat(sprintf("%d. %s\n", i, similar_practices$street[i]))
+          }
+          selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select and press Enter: "))
+          
+          if (selection >= 1 && selection <= nrow(similar_practices)) {
+            break
+          } else {
+            cat("Invalid selection. Please try again.\n \n")
+          }
+        }
+        
+        selected_practice_id <- similar_practices$practiceid[selection]
+        selected_practice_name <- similar_practices$street[selection]
+        cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+        
+        # Fetch the postcode of the selected practice
+        selected_practice_postcode <- dbGetQuery(con, sprintf("
+                                                          SELECT postcode 
+                                                          FROM address 
+                                                          WHERE practiceid = '%s'", selected_practice_id))$postcode
+        
+        
+        # Fetch centile for CHD of selected practice
+        
+        # Assign practiceID of selected practice to county using assign_county function
+        
+        # Fetch avg centile of that selected practice's county (excluding selected practice)
+        
+        # Plot practiceID centile vs county centile
+        
+      } else {
+        cat("No practices found with a similar postcode.\n")
+      }
+    } else if (nrow(practices) == 1) {
+      # Fetch the postcode of the selected practice
+      selected_practice_id <- practices$practiceid[1]
+      selected_practice_name <- practices$street[1]
+      cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+      selected_practice_postcode <- dbGetQuery(con, sprintf("
+                                                            SELECT postcode 
+                                                            FROM address 
+                                                            WHERE practiceid = '%s'", selected_practice_id))$postcode
+      
+      # Fetch centile for CHD of selected practice
+      fetch_chd_centile_for_practice <- function(selected_practice_id) {
+        query <- sprintf("
+    SELECT centile
+    FROM qof_achievement
+    WHERE orgcode = '%s' AND indicator = 'CHD001'", selected_practice_id)
+        data <- dbGetQuery(con, query)
+        return(data$centile[1])
+      }
+      
+      # Assign practiceID of selected practice to county using assign_county function
+      selected_practice_county <- assign_county(selected_practice_postcode, NULL, NULL)  # Adjust as needed if more info is required
+      
+      
+      # Fetch avg centile of that selected practice's county (excluding selected practice)
+      fetch_avg_chd_centile_for_county <- function(county_name, excluded_practice_id) {
+        query <- sprintf("
+    SELECT AVG(centile) AS avg_centile
+    FROM qof_achievement JOIN address ON qof_achievement.orgcode = address.practiceid
+    WHERE address.county = '%s' AND qof_achievement.indicator = 'CHD001' AND qof_achievement.orgcode != '%s'", county_name, excluded_practice_id)
+        data <- dbGetQuery(con, query)
+        return(data$avg_centile[1])
+      }
+      
+      # Plot practiceID centile vs county centile
+      library(ggplot2)
+      
+      selected_practice_chd_centile <- fetch_chd_centile_for_practice(selected_practice_id)
+      county_avg_chd_centile <- fetch_avg_chd_centile_for_county(selected_practice_county, selected_practice_id)
+      
+      data_to_plot <- data.frame(
+        Category = c("Selected Practice", "County Average"),
+        Centile = c(selected_practice_chd_centile, county_avg_chd_centile)
+      )
+      
+      print(
+        ggplot(data_to_plot, aes(x = Category, y = Centile, fill = Category)) +
+        geom_bar(stat = "identity", position = "dodge") +
+        labs(title = "CHD Centile: Practice vs County Average", y = "CHD Centile", x = "") +
+        theme_minimal()
+      )
+      
+      
+    } else {
+      cat("\nMultiple practices found for the provided postcode. Please select one from the list below:\n")
+      repeat {
+        for (i in 1:nrow(practices)) {
+          cat(sprintf("%d: %s\n", i, practices$street[i]))
+        }
+        selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select: "))
+        
+        # Validate the selection
+        if (selection >= 1 && selection <= nrow(practices)) {
+          break
+        } else {
+          cat("Invalid selection. Please try again.\n \n")
+        }
+      }
+      
+      selected_practice_id <- practices$practiceid[selection]
+      selected_practice_name <- practices$street[selection]
+      cat(sprintf("\nSelected practice: %s. Please wait a few seconds...\n", selected_practice_name))
+      
+      # Fetch the postcode of the selected practice
+      selected_practice_postcode <- dbGetQuery(con, sprintf("SELECT postcode FROM address WHERE practiceid = '%s'", selected_practice_id))$postcode
+      
+      # Fetch centile for CHD of selected practice
+      
+      # Assign practiceID of selected practice to county using assign_county function
+      
+      # Fetch avg centile of that selected practice's county (excluding selected practice)
+      
+      # Plot practiceID centile vs county centile
+    }
+    
+    # After fetching and displaying the information, prompt for next action
+    cat("
+  Please make a selection:
+  =======================
+  1. Select another practice
+  2. Return to Main Menu
+  ")
+    
+    next_action <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
+    
+    if (next_action == 2) {
+      break  # Exit the repeat loop to return to the main menu
+    } else if (next_action != 1) {
+      cat("Invalid selection. Returning to main menu.\n")
+      break
+    }
+  }
 }
 
 # Function to interpret cluster results
@@ -1201,21 +1357,24 @@ interpret_clusters <- function(cluster_percentages, threshold) {
   return(interpretation)
 }
 
-interpret_cluster_correlation <- function(correlation, variable1, variable2) {
+# Function to interpret correlation between clusters
+interpret_cluster_correlation <- function(cluster_number, correlation, variable1, variable2) {
   # Define thresholds for strong/weak correlation
   strong_threshold <- 0.7
   weak_threshold <- 0.3
   
   # Determine the strength of the correlation
-  strength <- ifelse(abs(correlation) > strong_threshold, "strong",
-                     ifelse(abs(correlation) < weak_threshold, "weak", "moderate"))
+  strength <- ifelse(abs(correlation) > strong_threshold, "STRONG",
+                     ifelse(abs(correlation) < weak_threshold, "WEAK", "MODERATE"))
   
   # Determine the direction of the correlation
-  direction <- ifelse(correlation > 0, "positive", "negative")
+  direction <- ifelse(correlation > 0, "POSITIVE", "NEGATIVE")
   
   # Construct the sentence
-  sentence <- sprintf("For Cluster %d: there is a %s and %s correlation between %s and %s (%.3f).",
-                      cluster_number, direction, strength, variable1, variable2, correlation)
+  sentence <- sprintf("\nFor Cluster %d: there is a %s and %s correlation between %s and %s (%.3f).\n This suggests that within this cluster, practices that spend %s on %s tend to have %s performance.\n",
+                      cluster_number, direction, strength, variable1, variable2, correlation, 
+                      ifelse(correlation > 0, "more", "less"), variable1, 
+                      ifelse(correlation > 0, "better", "worse"))
   return(sentence)
 }
 
@@ -1247,6 +1406,11 @@ Use the menu options below to explore the data regarding CHD at practices across
            # Plot centile scores choropleth
            county_performance_data_chd <- retrieve_county_performance_chd()
            plot_county_performance_chd(county_performance_data_chd$combined_data, county_performance_data_chd$county_centile_data)
+           
+           # Plot user selection vs county
+           # NOTE: I wanted to compare the user's selected practice CHD percentile to its respective county avg CHD performance but I just couldn't get it to work. I think I made my county-related functions too specific and later struggled to apply them more generally outside of the choropleth map. My aim was to use this county information to develop subsequent analyses controlling for geographic location (as a loose proxy to control for demographic confounders not present in the database) to explore spend efficiency on CHD-related drugs more precisely. 
+           
+           
            
          },
          { # Option 2. Spend efficiency
@@ -1334,10 +1498,9 @@ Use the menu options below to explore the data regarding CHD at practices across
            )
          },
          { # Option 3. Identify outliers
-           cat("Performing analysis. Please wait...\n \n")
-           
+
            # Cluster analysis query
-           cat("\nPerforming cluster analysis...\n")
+           cat("\nPerforming cluster analysis. Please wait...\n")
            query <- "
                     SELECT
                     gp.practiceid,
@@ -1360,7 +1523,7 @@ Use the menu options below to explore the data regarding CHD at practices across
            # Normalize the data
            data_normalized <- as.data.frame(scale(cluster_data[,c("total_spend_on_beta_blockers", "total_quantity_of_chd_medication", "number_of_chd_related_prescriptions", "performance_centile")]))
            
-           # Perform k-means clustering with the chosen number of clusters, for example, k = 3
+           # Perform k-means clustering
            set.seed(100)  # Ensure reproducibility
            k_means_result <- kmeans(data_normalized, centers = 3)
            
@@ -1441,7 +1604,6 @@ Use the menu options below to explore the data regarding CHD at practices across
            colnames(cluster_summary) <- c('Cluster', 'Mean spend', 'Median spend', 'Mean performance centile', 'Median performance centile', 'Mean quantity CHD medication')
            print(cluster_summary)
            
-           
            # Count the number of practices in each cluster and calculate the percentage of total practices
            cluster_distribution <- cluster_data %>%
              group_by(cluster) %>%
@@ -1465,26 +1627,6 @@ Use the menu options below to explore the data regarding CHD at practices across
                quantity_performance_correlation = cor(total_quantity_of_chd_medication, performance_centile, use = "complete.obs")
              )
            
-           # Interpret correlation between clusters
-           interpret_cluster_correlation <- function(cluster_number, correlation, variable1, variable2) {
-             # Define thresholds for strong/weak correlation
-             strong_threshold <- 0.7
-             weak_threshold <- 0.3
-             
-             # Determine the strength of the correlation
-             strength <- ifelse(abs(correlation) > strong_threshold, "STRONG",
-                                ifelse(abs(correlation) < weak_threshold, "WEAK", "MODERATE"))
-             
-             # Determine the direction of the correlation
-             direction <- ifelse(correlation > 0, "POSITIVE", "NEGATIVE")
-             
-             # Construct the sentence
-             sentence <- sprintf("\nFor Cluster %d: there is a %s and %s correlation between %s and %s (%.3f).\n This suggests that within this cluster, practices that spend %s on %s tend to have %s performance.\n",
-                                 cluster_number, direction, strength, variable1, variable2, correlation, 
-                                 ifelse(correlation > 0, "more", "less"), variable1, 
-                                 ifelse(correlation > 0, "better", "worse"))
-             return(sentence)
-           }
            
            # Apply the function to each row in the cluster_correlations dataframe
            cat("\nSummary information:\n===================\n")
@@ -1520,8 +1662,16 @@ Use the menu options below to explore the data regarding CHD at practices across
              print(last_plot()) # Display the plot
            }
            
+           # Fetch GP surgery names
+           gp_data <- dbGetQuery(con, 
+                                 "SELECT DISTINCT gp.practiceid, ad.street 
+                                 FROM gp_data_up_to_2015 as gp
+                                 JOIN address AS ad ON gp.practiceid = ad.practiceid")
+           
+           gp_data <- unique(gp_data)
+           
            # Identify outliers
-           identify_outliers <- function(data, column) {
+           identify_outliers <- function(data, column, gp_data) {
              q1 <- quantile(data[[column]], 0.25)
              q3 <- quantile(data[[column]], 0.75)
              iqr <- q3 - q1
@@ -1530,22 +1680,47 @@ Use the menu options below to explore the data regarding CHD at practices across
              upper_bound <- q3 + 1.5 * iqr
              
              outliers <- data[data[[column]] < lower_bound | data[[column]] > upper_bound, ]
-             return(outliers)
+             
+             # Join practice names
+             outliers_with_names <- merge(outliers, gp_data, by = "practiceid", all.x = TRUE)
+             
+             return(outliers_with_names)
            }
            
            # Apply the identify_outliers function to each cluster and variable
            outliers_list <- lapply(variables_to_plot, function(variable) {
              lapply(unique(cluster_data$cluster), function(cluster) {
                cluster_subset <- cluster_data[cluster_data$cluster == cluster, ]
-               outliers <- identify_outliers(cluster_subset, variable)
+               outliers <- identify_outliers(cluster_subset, variable, gp_data)
                if (nrow(outliers) > 0) {
                  cat("\n \n")
                  cat(paste("Outliers in cluster", cluster, "for", variable, ":\n"))
-                 print(outliers)
+                 
+                 # Create temporary copy with renamed columns
+                 temp_outliers <- outliers
+                 colnames(temp_outliers)[colnames(temp_outliers) == 'practiceid'] <- 'Practice ID'
+                 colnames(temp_outliers)[colnames(temp_outliers) == 'street'] <- 'GP Surgery'
+                 
+                 print(temp_outliers[, c("Practice ID",'GP Surgery', variable)])
                }
              })
            })
            
+           # Provide user with choice to exit or return to Main Menu
+           user_choice <- end_of_operation_choice()
+           
+           # Handle the user's choice
+           if (user_choice == 1) {
+             # Return to Main Menu
+             return(TRUE)
+           } else if (user_choice == 2) {
+             # Exit the program by returning FALSE, which will break the main loop
+             cat("Exiting program...\n")
+             return(FALSE)
+           } else {
+             cat("Invalid choice. Returning to the main menu.\n")
+             return(TRUE)
+           }
          },
          { # Return to Main Menu
            cat("Returning to Main Menu...\n \n")
