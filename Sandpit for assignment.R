@@ -1197,8 +1197,13 @@ user_chd_performance_query <- function(selected_practice_id) {
                    WHERE q.indicator = 'CHD001'
                    AND a.practiceid = '%s'", selected_practice_id)
   
-  # Execute the query
   user_chd_performance <- dbGetQuery(con, query)
+  
+  # Check if the result is empty
+  if (nrow(user_chd_performance) == 0) {
+    # Set centile to NA if no data is found
+    user_chd_performance <- data.frame(centile = NA)
+  }
   
   return(user_chd_performance)
 }
@@ -1255,63 +1260,72 @@ select_gp_info_chd <- function(){
         cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
         
       
+        # Initialize variables with NA to ensure they exist
+        selected_county_avg_chd <- NA
+        practice_chd_percentage <- NA
+        county_avg_chd_percentage <- NA
+        
         # Fetch centile for CHD of selected practice
-        user_chd_performance_query(selected_practice_id)
+        user_chd_performance <- user_chd_performance_query(selected_practice_id)
+        
+        # Check if the result is empty
+        if (nrow(user_chd_performance) == 0 || is.na(user_chd_performance$centile[1])) {
+          user_chd_performance <- data.frame(centile = NA) # Ensure there's a row with NA if no data is found
+        } else {
+          # Convert to percentage
+          practice_chd_percentage <- user_chd_performance$centile[1] * 100
+        }
         
         # Fetch postcode, county and posttown information for the selected practice ID
-        fetch_practice_location_info(selected_practice_id)
-        
         location_info <- fetch_practice_location_info(selected_practice_id)
 
         # Assign practiceID of selected practice to county using assign_county function
         if(nrow(location_info) > 0) {
           standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
           true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
-          print(true_county_name)
+
+          # Fetch avg centile of that selected practice's county
+          county_performance_data <- retrieve_county_performance_chd()
+          if (!is.null(county_performance_data) && nrow(county_performance_data$county_centile_data) > 0 && !is.na(true_county_name)) {
+            selected_county_avg_chd <- county_performance_data$county_centile_data %>%
+              filter(county == true_county_name) %>%
+              .$average_centile
+            if (!is.na(selected_county_avg_chd)) {
+              county_avg_chd_percentage <- selected_county_avg_chd * 100
+            }
+          }
+          
+          
+          # Check if the CHD performance data is not missing
+          if (!is.na(user_chd_performance$centile) && !is.na(selected_county_avg_chd)) {
+
+            cat("\nSummary information:\n===================\n")
+            cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
+            cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
+            
+            # Define and plot data
+            data_to_plot <- data.frame(
+              Entity = c("Selected Practice", "County Average"),
+              CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
+            )
+            data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+            
+            print(
+              ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
+                geom_bar(stat = "identity", width = 0.5) +
+                scale_fill_brewer(palette = "Pastel1") +
+                labs(title = "CHD Centile Comparison: Practice vs. County",
+                     y = "CHD Centile (%)",
+                     x = "") +
+                theme_minimal() +
+                geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
+            )
+          } else {
+            cat("Missing CHD performance data for selected practice or county average.\n")
+          }
         } else {
           print("No location information found for the selected practice.")
         }
-        
-        
-        # Fetch avg centile of that selected practice's county
-        
-        county_performance_data <- retrieve_county_performance_chd()
-        
-        selected_county_avg_chd <- county_performance_data$county_centile_data %>%
-          filter(county == true_county_name) %>%
-          .$average_centile
-        
-        # Assuming user_chd_performance contains the CHD centile score for the user's selected practice
-        user_chd_performance <- user_chd_performance_query(selected_practice_id)
-        
-        # Convert to percentage
-        practice_chd_percentage <- user_chd_performance$centile * 100
-        county_avg_chd_percentage <- selected_county_avg_chd * 100
-        
-        # Step 3: Compare the user's practice CHD performance with the county average
-        cat("\nSummary information:\n===================\n")
-        cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
-        cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
-        
-        
-        # Plot practiceID centile vs county centile
-        data_to_plot <- data.frame(
-          Entity = c("Selected Practice", "County Average"),
-          CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
-        )
-        
-        data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
-        
-        print(
-          ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
-            geom_bar(stat = "identity", width = 0.5) +
-            labs(title = "CHD Centile Comparison: Practice vs. County",
-                 y = "CHD Centile (%)",
-                 x = "") +
-            theme_minimal() +
-            scale_fill_manual(values = c("Selected Practice" = "blue", "County Average" = "red")) +
-            geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
-        )
         
       } else {
         cat("No practices found with a similar postcode.\n")
@@ -1328,64 +1342,72 @@ select_gp_info_chd <- function(){
       
       
       
+      # Initialize variables with NA to ensure they exist
+      selected_county_avg_chd <- NA
+      practice_chd_percentage <- NA
+      county_avg_chd_percentage <- NA
+      
       # Fetch centile for CHD of selected practice
-      user_chd_performance_query(selected_practice_id)
+      user_chd_performance <- user_chd_performance_query(selected_practice_id)
+      
+      # Check if the result is empty
+      if (nrow(user_chd_performance) == 0 || is.na(user_chd_performance$centile[1])) {
+        user_chd_performance <- data.frame(centile = NA) # Ensure there's a row with NA if no data is found
+      } else {
+        # Convert to percentage
+        practice_chd_percentage <- user_chd_performance$centile[1] * 100
+      }
       
       # Fetch postcode, county and posttown information for the selected practice ID
-      fetch_practice_location_info(selected_practice_id)
-      
       location_info <- fetch_practice_location_info(selected_practice_id)
-      print(location_info)
       
       # Assign practiceID of selected practice to county using assign_county function
       if(nrow(location_info) > 0) {
         standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
         true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
-        print(true_county_name)
+
+        # Fetch avg centile of that selected practice's county
+        county_performance_data <- retrieve_county_performance_chd()
+        if (!is.null(county_performance_data) && nrow(county_performance_data$county_centile_data) > 0 && !is.na(true_county_name)) {
+          selected_county_avg_chd <- county_performance_data$county_centile_data %>%
+            filter(county == true_county_name) %>%
+            .$average_centile
+          if (!is.na(selected_county_avg_chd)) {
+            county_avg_chd_percentage <- selected_county_avg_chd * 100
+          }
+        }
+        
+        
+        # Check if the CHD performance data is not missing
+        if (!is.na(user_chd_performance$centile) && !is.na(selected_county_avg_chd)) {
+          
+          cat("\nSummary information:\n===================\n")
+          cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
+          cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
+          
+          # Define and plot data
+          data_to_plot <- data.frame(
+            Entity = c("Selected Practice", "County Average"),
+            CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
+          )
+          data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+          
+          print(
+            ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
+              geom_bar(stat = "identity", width = 0.5) +
+              scale_fill_brewer(palette = "Pastel1") +
+              labs(title = "CHD Centile Comparison: Practice vs. County",
+                   y = "CHD Centile (%)",
+                   x = "") +
+              theme_minimal() +
+              geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
+          )
+        } else {
+          cat("Missing CHD performance data for selected practice or county average.\n")
+        }
       } else {
         print("No location information found for the selected practice.")
       }
-      
-      
-      # Fetch avg centile of that selected practice's county
-      
-      county_performance_data <- retrieve_county_performance_chd()
-      
-      selected_county_avg_chd <- county_performance_data$county_centile_data %>%
-        filter(county == true_county_name) %>%
-        .$average_centile
-      
-      # Assuming user_chd_performance contains the CHD centile score for the user's selected practice
-      user_chd_performance <- user_chd_performance_query(selected_practice_id)
-      
-      # Convert to percentage
-      practice_chd_percentage <- user_chd_performance$centile * 100
-      county_avg_chd_percentage <- selected_county_avg_chd * 100
-      
-      # Step 3: Compare the user's practice CHD performance with the county average
-      cat("\nSummary information:\n===================\n")
-      cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
-      cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
-      
-      
-      # Plot practiceID centile vs county centile
-      data_to_plot <- data.frame(
-        Entity = c("Selected Practice", "County Average"),
-        CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
-      )
-      
-      data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
-      
-      print(
-        ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
-          geom_bar(stat = "identity", width = 0.5) +
-          labs(title = "CHD Centile Comparison: Practice vs. County",
-               y = "CHD Centile (%)",
-               x = "") +
-          theme_minimal() +
-          scale_fill_manual(values = c("Selected Practice" = "blue", "County Average" = "red")) +
-          geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
-      )
       
       
     } else {
@@ -1408,63 +1430,72 @@ select_gp_info_chd <- function(){
       selected_practice_name <- practices$street[selection]
       cat(sprintf("\nSelected practice: %s. Please wait a few seconds...\n", selected_practice_name))
       
-      # Fetch postcode, county and posttown of selected practice
-      user_chd_performance_query(selected_practice_id)
+      # Initialize variables with NA to ensure they exist
+      selected_county_avg_chd <- NA
+      practice_chd_percentage <- NA
+      county_avg_chd_percentage <- NA
+      
+      # Fetch centile for CHD of selected practice
+      user_chd_performance <- user_chd_performance_query(selected_practice_id)
+      
+      # Check if the result is empty
+      if (nrow(user_chd_performance) == 0 || is.na(user_chd_performance$centile[1])) {
+        user_chd_performance <- data.frame(centile = NA) # Ensure there's a row with NA if no data is found
+      } else {
+        # Convert to percentage
+        practice_chd_percentage <- user_chd_performance$centile[1] * 100
+      }
       
       # Fetch postcode, county and posttown information for the selected practice ID
-      fetch_practice_location_info(selected_practice_id)
-      
       location_info <- fetch_practice_location_info(selected_practice_id)
-      print(location_info)
       
       # Assign practiceID of selected practice to county using assign_county function
       if(nrow(location_info) > 0) {
         standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
         true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
-        print(true_county_name)
+
+        # Fetch avg centile of that selected practice's county
+        county_performance_data <- retrieve_county_performance_chd()
+        if (!is.null(county_performance_data) && nrow(county_performance_data$county_centile_data) > 0 && !is.na(true_county_name)) {
+          selected_county_avg_chd <- county_performance_data$county_centile_data %>%
+            filter(county == true_county_name) %>%
+            .$average_centile
+          if (!is.na(selected_county_avg_chd)) {
+            county_avg_chd_percentage <- selected_county_avg_chd * 100
+          }
+        }
+        
+        
+        # Check if the CHD performance data is not missing
+        if (!is.na(user_chd_performance$centile) && !is.na(selected_county_avg_chd)) {
+          
+          cat("\nSummary information:\n===================\n")
+          cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
+          cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
+          
+          # Define and plot data
+          data_to_plot <- data.frame(
+            Entity = c("Selected Practice", "County Average"),
+            CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
+          )
+          data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+          
+          print(
+            ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
+              geom_bar(stat = "identity", width = 0.5) +
+              scale_fill_brewer(palette = "Pastel1") +
+              labs(title = "CHD Centile Comparison: Practice vs. County",
+                   y = "CHD Centile (%)",
+                   x = "") +
+              theme_minimal() +
+              geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
+          )
+        } else {
+          cat("Missing CHD performance data for selected practice or county average.\n")
+        }
       } else {
         print("No location information found for the selected practice.")
       }
-      
-      
-      # Fetch avg centile of that selected practice's county
-      
-      county_performance_data <- retrieve_county_performance_chd()
-      
-      selected_county_avg_chd <- county_performance_data$county_centile_data %>%
-        filter(county == true_county_name) %>%
-        .$average_centile
-      
-      # Assuming user_chd_performance contains the CHD centile score for the user's selected practice
-      user_chd_performance <- user_chd_performance_query(selected_practice_id)
-      
-      # Convert to percentage
-      practice_chd_percentage <- user_chd_performance$centile * 100
-      county_avg_chd_percentage <- selected_county_avg_chd * 100
-      
-      # Step 3: Compare the user's practice CHD performance with the county average
-      cat("\nSummary information:\n===================\n")
-      cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
-      cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
-      
-      # Plot practiceID centile vs county centile
-      data_to_plot <- data.frame(
-        Entity = c("Selected Practice", "County Average"),
-        CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
-      )
-      
-      data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
-      
-      print(
-        ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
-          geom_bar(stat = "identity", width = 0.5) +
-          labs(title = "CHD Centile Comparison: Practice vs. County",
-               y = "CHD Centile (%)",
-               x = "") +
-          theme_minimal() +
-          scale_fill_manual(values = c("Selected Practice" = "blue", "County Average" = "red")) +
-          geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
-      )
     }
     
     # After fetching and displaying the information, prompt for next action
@@ -1547,7 +1578,8 @@ Use the menu options below to explore the data regarding CHD at practices across
            plot_county_performance_chd(county_performance_data_chd$combined_data, county_performance_data_chd$county_centile_data)
            
            # Plot user selection vs county
-           # NOTE: I wanted to compare the user's selected practice CHD percentile to its respective county avg CHD performance but I just couldn't get it to work. I think I made my county-related functions too specific and later struggled to apply them more generally outside of the choropleth map. My aim was to use this county information to develop subsequent analyses controlling for geographic location (as a loose proxy to control for demographic confounders not present in the database) to explore spend efficiency on CHD-related drugs more precisely. 
+           # NOTE: I wanted to compare the user's selected practice CHD centile performance to its respective county average CHD performance but I just couldn't get it to work as intended. While some practices do work (such as ST. LUKE'S SURGERY which can be searched for with the postcode: NP11 5GX), displaying the centile performance comparison as a bar chart, many simply return NA values. I have implemented NA checks so that the code still runs, but having double-checked specific practices that are returning 'NA' and finding that they do have CHD centile values, I am unsure where precisely the issue is occurring. 
+           # NOTE: My aim was to use this county information to control for geographic location (as a rough proxy for demographic confounders not present in the database) to explore spend efficiency on CHD-related drugs as an alternative to just comparing to bigger/smaller practices, and provide more granularity than searching by region (i.e. the seven regions defined by the first two letters of the postcode) or by simply comparing to Wales as a whole.
            select_gp_info_chd()
              
            
