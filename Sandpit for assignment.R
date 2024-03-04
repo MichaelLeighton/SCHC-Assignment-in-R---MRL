@@ -7,6 +7,7 @@ library(tidyr)
 library(patchwork) # May not need this
 library(scales) # for percentage display in 2.1 function (NOTE: double check if I kept this)
 library(cluster) # For cluster analysis in 2.3 Spend (NOTE: double check if I kept this)
+library(lubridate) # For W0 vs W9 analysis
 
 
 # Global variable to control the main loop
@@ -795,6 +796,17 @@ select_diabetic_drug_info <- function() {
 
 #### FUNCTIONS FOR Q.2 ####
 
+# Function to fetch chd data for a specific practice
+fetch_chd_rate_specific <- function(con, practice_id) {
+  query <- sprintf("
+    SELECT centile
+    FROM qof_achievement
+    WHERE orgcode = '%s' AND indicator = 'CHD001'
+    GROUP BY indicator", practice_id)
+  data <- dbGetQuery(con, query)
+  return(data)
+}
+
 # Function to standardize county
 standardize_county <- function(county, posttown) {
   
@@ -1176,16 +1188,33 @@ plot_county_performance_chd <- function(combined_data, county_centile_data) {
   print(county_centile_data, n = Inf)
 }
 
-# Function to fetch chd data for a specific practice
-fetch_chd_rate_specific <- function(con, practice_id) {
+# Fetch centile for CHD of selected practice
+user_chd_performance_query <- function(selected_practice_id) {
   query <- sprintf("
-    SELECT centile
-    FROM qof_achievement
-    WHERE orgcode = '%s' AND indicator = 'CHD001'
-    GROUP BY indicator", practice_id)
-  data <- dbGetQuery(con, query)
-  return(data)
+                   SELECT q.centile
+                   FROM qof_achievement q
+                   INNER JOIN address a ON q.orgcode = a.practiceid
+                   WHERE q.indicator = 'CHD001'
+                   AND a.practiceid = '%s'", selected_practice_id)
+  
+  # Execute the query
+  user_chd_performance <- dbGetQuery(con, query)
+  
+  return(user_chd_performance)
 }
+
+# Function to retrieve postcode, county, and posttown for a given practice ID
+fetch_practice_location_info <- function(selected_practice_id) {
+  query <- sprintf("
+               SELECT postcode, county, posttown
+               FROM address
+               WHERE practiceid = '%s'", selected_practice_id)
+  
+  location_info <- dbGetQuery(con, query)
+  
+  return(location_info)
+}
+
 
 # Function for Q2.1
 select_gp_info_chd <- function(){
@@ -1225,20 +1254,64 @@ select_gp_info_chd <- function(){
         selected_practice_name <- similar_practices$street[selection]
         cat(sprintf("Selected practice: %s. Please wait a few seconds...\n", selected_practice_name))
         
-        # Fetch the postcode of the selected practice
-        selected_practice_postcode <- dbGetQuery(con, sprintf("
-                                                          SELECT postcode 
-                                                          FROM address 
-                                                          WHERE practiceid = '%s'", selected_practice_id))$postcode
-        
-        
+      
         # Fetch centile for CHD of selected practice
+        user_chd_performance_query(selected_practice_id)
         
+        # Fetch postcode, county and posttown information for the selected practice ID
+        fetch_practice_location_info(selected_practice_id)
+        
+        location_info <- fetch_practice_location_info(selected_practice_id)
+
         # Assign practiceID of selected practice to county using assign_county function
+        if(nrow(location_info) > 0) {
+          standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
+          true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
+          print(true_county_name)
+        } else {
+          print("No location information found for the selected practice.")
+        }
         
-        # Fetch avg centile of that selected practice's county (excluding selected practice)
+        
+        # Fetch avg centile of that selected practice's county
+        
+        county_performance_data <- retrieve_county_performance_chd()
+        
+        selected_county_avg_chd <- county_performance_data$county_centile_data %>%
+          filter(county == true_county_name) %>%
+          .$average_centile
+        
+        # Assuming user_chd_performance contains the CHD centile score for the user's selected practice
+        user_chd_performance <- user_chd_performance_query(selected_practice_id)
+        
+        # Convert to percentage
+        practice_chd_percentage <- user_chd_performance$centile * 100
+        county_avg_chd_percentage <- selected_county_avg_chd * 100
+        
+        # Step 3: Compare the user's practice CHD performance with the county average
+        cat("\nSummary information:\n===================\n")
+        cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
+        cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
+        
         
         # Plot practiceID centile vs county centile
+        data_to_plot <- data.frame(
+          Entity = c("Selected Practice", "County Average"),
+          CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
+        )
+        
+        data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+        
+        print(
+          ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
+            geom_bar(stat = "identity", width = 0.5) +
+            labs(title = "CHD Centile Comparison: Practice vs. County",
+                 y = "CHD Centile (%)",
+                 x = "") +
+            theme_minimal() +
+            scale_fill_manual(values = c("Selected Practice" = "blue", "County Average" = "red")) +
+            geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
+        )
         
       } else {
         cat("No practices found with a similar postcode.\n")
@@ -1253,46 +1326,65 @@ select_gp_info_chd <- function(){
                                                             FROM address 
                                                             WHERE practiceid = '%s'", selected_practice_id))$postcode
       
+      
+      
       # Fetch centile for CHD of selected practice
-      fetch_chd_centile_for_practice <- function(selected_practice_id) {
-        query <- sprintf("
-    SELECT centile
-    FROM qof_achievement
-    WHERE orgcode = '%s' AND indicator = 'CHD001'", selected_practice_id)
-        data <- dbGetQuery(con, query)
-        return(data$centile[1])
-      }
+      user_chd_performance_query(selected_practice_id)
+      
+      # Fetch postcode, county and posttown information for the selected practice ID
+      fetch_practice_location_info(selected_practice_id)
+      
+      location_info <- fetch_practice_location_info(selected_practice_id)
+      print(location_info)
       
       # Assign practiceID of selected practice to county using assign_county function
-      selected_practice_county <- assign_county(selected_practice_postcode, NULL, NULL)  # Adjust as needed if more info is required
-      
-      
-      # Fetch avg centile of that selected practice's county (excluding selected practice)
-      fetch_avg_chd_centile_for_county <- function(county_name, excluded_practice_id) {
-        query <- sprintf("
-    SELECT AVG(centile) AS avg_centile
-    FROM qof_achievement JOIN address ON qof_achievement.orgcode = address.practiceid
-    WHERE address.county = '%s' AND qof_achievement.indicator = 'CHD001' AND qof_achievement.orgcode != '%s'", county_name, excluded_practice_id)
-        data <- dbGetQuery(con, query)
-        return(data$avg_centile[1])
+      if(nrow(location_info) > 0) {
+        standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
+        true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
+        print(true_county_name)
+      } else {
+        print("No location information found for the selected practice.")
       }
       
+      
+      # Fetch avg centile of that selected practice's county
+      
+      county_performance_data <- retrieve_county_performance_chd()
+      
+      selected_county_avg_chd <- county_performance_data$county_centile_data %>%
+        filter(county == true_county_name) %>%
+        .$average_centile
+      
+      # Assuming user_chd_performance contains the CHD centile score for the user's selected practice
+      user_chd_performance <- user_chd_performance_query(selected_practice_id)
+      
+      # Convert to percentage
+      practice_chd_percentage <- user_chd_performance$centile * 100
+      county_avg_chd_percentage <- selected_county_avg_chd * 100
+      
+      # Step 3: Compare the user's practice CHD performance with the county average
+      cat("\nSummary information:\n===================\n")
+      cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
+      cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
+      
+      
       # Plot practiceID centile vs county centile
-      library(ggplot2)
-      
-      selected_practice_chd_centile <- fetch_chd_centile_for_practice(selected_practice_id)
-      county_avg_chd_centile <- fetch_avg_chd_centile_for_county(selected_practice_county, selected_practice_id)
-      
       data_to_plot <- data.frame(
-        Category = c("Selected Practice", "County Average"),
-        Centile = c(selected_practice_chd_centile, county_avg_chd_centile)
+        Entity = c("Selected Practice", "County Average"),
+        CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
       )
       
+      data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+      
       print(
-        ggplot(data_to_plot, aes(x = Category, y = Centile, fill = Category)) +
-        geom_bar(stat = "identity", position = "dodge") +
-        labs(title = "CHD Centile: Practice vs County Average", y = "CHD Centile", x = "") +
-        theme_minimal()
+        ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
+          geom_bar(stat = "identity", width = 0.5) +
+          labs(title = "CHD Centile Comparison: Practice vs. County",
+               y = "CHD Centile (%)",
+               x = "") +
+          theme_minimal() +
+          scale_fill_manual(values = c("Selected Practice" = "blue", "County Average" = "red")) +
+          geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
       )
       
       
@@ -1316,16 +1408,63 @@ select_gp_info_chd <- function(){
       selected_practice_name <- practices$street[selection]
       cat(sprintf("\nSelected practice: %s. Please wait a few seconds...\n", selected_practice_name))
       
-      # Fetch the postcode of the selected practice
-      selected_practice_postcode <- dbGetQuery(con, sprintf("SELECT postcode FROM address WHERE practiceid = '%s'", selected_practice_id))$postcode
+      # Fetch postcode, county and posttown of selected practice
+      user_chd_performance_query(selected_practice_id)
       
-      # Fetch centile for CHD of selected practice
+      # Fetch postcode, county and posttown information for the selected practice ID
+      fetch_practice_location_info(selected_practice_id)
+      
+      location_info <- fetch_practice_location_info(selected_practice_id)
+      print(location_info)
       
       # Assign practiceID of selected practice to county using assign_county function
+      if(nrow(location_info) > 0) {
+        standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
+        true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
+        print(true_county_name)
+      } else {
+        print("No location information found for the selected practice.")
+      }
       
-      # Fetch avg centile of that selected practice's county (excluding selected practice)
+      
+      # Fetch avg centile of that selected practice's county
+      
+      county_performance_data <- retrieve_county_performance_chd()
+      
+      selected_county_avg_chd <- county_performance_data$county_centile_data %>%
+        filter(county == true_county_name) %>%
+        .$average_centile
+      
+      # Assuming user_chd_performance contains the CHD centile score for the user's selected practice
+      user_chd_performance <- user_chd_performance_query(selected_practice_id)
+      
+      # Convert to percentage
+      practice_chd_percentage <- user_chd_performance$centile * 100
+      county_avg_chd_percentage <- selected_county_avg_chd * 100
+      
+      # Step 3: Compare the user's practice CHD performance with the county average
+      cat("\nSummary information:\n===================\n")
+      cat(sprintf("CHD performance for selected practice: %.2f%%\n", practice_chd_percentage))
+      cat(sprintf("Average CHD performance for %s: %.2f%%\n", true_county_name, county_avg_chd_percentage))
       
       # Plot practiceID centile vs county centile
+      data_to_plot <- data.frame(
+        Entity = c("Selected Practice", "County Average"),
+        CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
+      )
+      
+      data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+      
+      print(
+        ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
+          geom_bar(stat = "identity", width = 0.5) +
+          labs(title = "CHD Centile Comparison: Practice vs. County",
+               y = "CHD Centile (%)",
+               x = "") +
+          theme_minimal() +
+          scale_fill_manual(values = c("Selected Practice" = "blue", "County Average" = "red")) +
+          geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
+      )
     }
     
     # After fetching and displaying the information, prompt for next action
@@ -1384,7 +1523,7 @@ select_efficiency_info <- function() {
   
 Coronary heart disease (CHD) is a chronic condition and one of the leading causes of death worldwide, resulting in thousands of hospitalizations in Wales per year. 
 
-One of the most common treatments for heart disease is the use of beta blockers, a preventative measure against myocardial infarction (MI). These block cell receptors that - if bound - would normally result in the release of hormones responsible for increasing heart rate and thereby potential health consequences.
+One of the most common treatments for heart disease is the use of beta blockers, a preventative measure against myocardial infarction (MI). These block cell receptors that - if bound and activated - would normally result in the release of hormones responsible for increasing heart rate and thereby potential health consequences.
 
 Use the menu options below to explore the data regarding CHD at practices across Wales.
 
@@ -1409,7 +1548,8 @@ Use the menu options below to explore the data regarding CHD at practices across
            
            # Plot user selection vs county
            # NOTE: I wanted to compare the user's selected practice CHD percentile to its respective county avg CHD performance but I just couldn't get it to work. I think I made my county-related functions too specific and later struggled to apply them more generally outside of the choropleth map. My aim was to use this county information to develop subsequent analyses controlling for geographic location (as a loose proxy to control for demographic confounders not present in the database) to explore spend efficiency on CHD-related drugs more precisely. 
-           
+           select_gp_info_chd()
+             
            
            
          },
@@ -1441,11 +1581,11 @@ Use the menu options below to explore the data regarding CHD at practices across
            
            # Print the results
            colnames(top_beta_blockers) <- c('Drug Type', 'Total Spend (£)')
-           cat("\nTop 5 Beta Blockers by Spend:\n")
+           cat("\nTop 5 Beta Blockers by Spend:\n============================\n")
            print(top_beta_blockers)
            
            colnames(bottom_beta_blockers) <- c('Drug Type', 'Total Spend (£)')
-           cat("\nBottom 5 Beta Blockers by Spend:\n")
+           cat("\nBottom 5 Beta Blockers by Spend:\n================================\n")
            print(bottom_beta_blockers)
            
            # Query relationship between beta blocker spend and CHD performance
@@ -1496,6 +1636,7 @@ Use the menu options below to explore the data regarding CHD at practices across
                     y = "CHD Performance Centile") +
                theme_minimal()
            )
+           
          },
          { # Option 3. Identify outliers
 
@@ -1536,58 +1677,55 @@ Use the menu options below to explore the data regarding CHD at practices across
              summarise(across(everything(), mean, na.rm = TRUE))
            
            # Scatter plot for spend vs. performance centile
-           print(
-             ggplot(cluster_data, aes(x = total_spend_on_beta_blockers, y = performance_centile, color = factor(cluster))) +
-               geom_point() +
-               labs(title = "Cluster Analysis: Spend vs. Performance Centile",
-                    x = "Total Spend on Beta-Blockers",
-                    y = "Performance Centile",
-                    color = "Cluster") +
-               theme_minimal()
-           )
+           plot1 <- ggplot(cluster_data, aes(x = total_spend_on_beta_blockers, y = performance_centile, color = factor(cluster))) +
+            geom_point() +
+            labs(title = "Spend vs. Performance",
+                x = "Total Spend on Beta-Blockers",
+                y = "Performance Centile",
+                color = "Cluster") +
+            theme_minimal()
            
            # Scatter plot for total quantity of CHD medication vs. performance centile
-           print(
-             ggplot(cluster_data, aes(x = total_quantity_of_chd_medication, y = performance_centile, color = factor(cluster))) +
+           plot2 <- ggplot(cluster_data, aes(x = total_quantity_of_chd_medication, y = performance_centile, color = factor(cluster))) +
                geom_point() +
-               labs(title = "Cluster Analysis: Quantity of CHD medication vs. Performance Centile",
-                    x = "Total Quantity of CHD medication",
+               labs(title = "Medication Quantity vs. Performance",
+                    x = "Quantity of CHD medication",
                     y = "Performance Centile",
                     color = "Cluster") +
                theme_minimal()
-           )
            
            # Scatter plot for number of CHD-related prescriptions vs. performance centile
-           print(
-             ggplot(cluster_data, aes(x = number_of_chd_related_prescriptions, y = performance_centile, color = factor(cluster))) +
+           plot3 <- ggplot(cluster_data, aes(x = number_of_chd_related_prescriptions, y = performance_centile, color = factor(cluster))) +
                geom_point() +
-               labs(title = "Cluster Analysis: Number of CHD-related prescriptions vs. Performance Centile",
+               labs(title = "Prescriptions vs. Performance",
                     x = "Number of CHD-related Prescriptions",
                     y = "Performance Centile",
                     color = "Cluster") +
                theme_minimal()
-           )
            
-           # Multidimensional scaling for cluster plot
-           mds <- cmdscale(dist(data_normalized), k = 2)  # k is the number of dimensions
-           
-           # Convert to a dataframe
-           mds_df <- as.data.frame(mds)
+           # MDS Plot
+           mds_df <- as.data.frame(cmdscale(dist(data_normalized), k = 2))  # Convert to a dataframe
            mds_df$cluster <- cluster_data$cluster
            
-           # Plot
-           print(
-             ggplot(mds_df, aes(x = V1, y = V2, color = factor(cluster))) +
-               geom_point() +
-               labs(title = "Cluster Analysis: MDS Plot",
-                    x = "Dimension 1",
-                    y = "Dimension 2",
-                    color = "Cluster") +
-               theme_minimal()
-           )
+           plot4 <- ggplot(mds_df, aes(x = V1, y = V2, color = factor(cluster))) +
+             geom_point() +
+             labs(title = "Multidimensional Scaling",
+                  x = "Dimension 1",
+                  y = "Dimension 2",
+                  color = "Cluster") +
+             theme_minimal()
            
-           cat("\n \n")
+           # Combine plots
+           plot1 <- plot1 + theme(legend.position = "none")
+           plot2 <- plot2 + theme(legend.position = "right") + guides(color=guide_legend("Cluster"))
+           plot3 <- plot3 + theme(legend.position = "none")
+           plot4 <- plot4 + theme(legend.position = "none")
+           
+           print((plot1 | plot2) / (plot3 | plot4))
+          
+
            # Summarize the cluster data
+           cat("\n \n")
            cluster_summary <- cluster_data %>%
              group_by(cluster) %>%
              summarise(
@@ -1661,6 +1799,7 @@ Use the menu options below to explore the data regarding CHD at practices across
                theme_minimal()
              print(last_plot()) # Display the plot
            }
+          
            
            # Fetch GP surgery names
            gp_data <- dbGetQuery(con, 
