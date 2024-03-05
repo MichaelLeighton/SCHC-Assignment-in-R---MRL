@@ -1296,7 +1296,7 @@ select_gp_info_chd <- function(){
           }
           
           
-          # Check if the CHD performance data is not missing
+          # Check to ensure CHD performance data is not missing
           if (!is.na(user_chd_performance$centile) && !is.na(selected_county_avg_chd)) {
 
             cat("\nSummary information:\n===================\n")
@@ -1305,17 +1305,17 @@ select_gp_info_chd <- function(){
             
             # Define and plot data
             data_to_plot <- data.frame(
-              Entity = c("Selected Practice", "County Average"),
+              Entity = c(selected_practice_name, paste(true_county_name)),
               CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
             )
-            data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+            data_to_plot$Entity <- factor(data_to_plot$Entity, levels = data_to_plot$Entity)
             
             print(
               ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
                 geom_bar(stat = "identity", width = 0.5) +
                 scale_fill_brewer(palette = "Pastel1") +
-                labs(title = "CHD Centile Comparison: Practice vs. County",
-                     y = "CHD Centile (%)",
+                labs(title = paste("CHD Performance:", selected_practice_name, "vs.", true_county_name),
+                     y = "CHD Performance (%)",
                      x = "") +
                 theme_minimal() +
                 geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
@@ -1387,17 +1387,17 @@ select_gp_info_chd <- function(){
           
           # Define and plot data
           data_to_plot <- data.frame(
-            Entity = c("Selected Practice", "County Average"),
+            Entity = c(selected_practice_name, paste(true_county_name)),
             CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
           )
-          data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+          data_to_plot$Entity <- factor(data_to_plot$Entity, levels = data_to_plot$Entity)
           
           print(
             ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
               geom_bar(stat = "identity", width = 0.5) +
               scale_fill_brewer(palette = "Pastel1") +
-              labs(title = "CHD Centile Comparison: Practice vs. County",
-                   y = "CHD Centile (%)",
+              labs(title = paste("CHD Performance:", selected_practice_name, "vs.", true_county_name),
+                   y = "CHD Performance (%)",
                    x = "") +
               theme_minimal() +
               geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
@@ -1475,17 +1475,17 @@ select_gp_info_chd <- function(){
           
           # Define and plot data
           data_to_plot <- data.frame(
-            Entity = c("Selected Practice", "County Average"),
+            Entity = c(selected_practice_name, paste(true_county_name)),
             CHD_Percentage = c(practice_chd_percentage, county_avg_chd_percentage)
           )
-          data_to_plot$Entity <- factor(data_to_plot$Entity, levels = c("Selected Practice", "County Average"))
+          data_to_plot$Entity <- factor(data_to_plot$Entity, levels = data_to_plot$Entity)
           
           print(
             ggplot(data_to_plot, aes(x = Entity, y = CHD_Percentage, fill = Entity)) +
               geom_bar(stat = "identity", width = 0.5) +
               scale_fill_brewer(palette = "Pastel1") +
-              labs(title = "CHD Centile Comparison: Practice vs. County",
-                   y = "CHD Centile (%)",
+              labs(title = paste("CHD Performance:", selected_practice_name, "vs.", true_county_name),
+                   y = "CHD Performance (%)",
                    x = "") +
               theme_minimal() +
               geom_text(aes(label = sprintf("%.2f%%", CHD_Percentage)), vjust = -0.5)
@@ -1506,10 +1506,15 @@ select_gp_info_chd <- function(){
   2. Return to Main Menu
   ")
     
-    next_action <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
+    next_action_input <- readline(prompt = "Enter the number of your selection and press Enter: ")
+    next_action <- as.integer(next_action_input)
     
-    if (next_action == 2) {
-      break  # Exit the repeat loop to return to the main menu
+    # Check if the conversion to integer resulted in NA due to invalid input
+    if (is.na(next_action)) {
+      cat("Invalid selection. Returning to main menu.\n")
+      break 
+    } else if (next_action == 2) {
+      break 
     } else if (next_action != 1) {
       cat("Invalid selection. Returning to main menu.\n")
       break
@@ -1922,7 +1927,7 @@ main_menu <- function() {
   
   Main Menu:
   =========
-  1. Select a GP for prescription, hypertension, and obesity information
+  1. Select a GP surgery for prescription, hypertension, and obesity information
   2. Compare Metformin prescription rates with hypertension and obesity rates
   3. Select a diabetic drug to compare with hypertension and obesity rates
   4. Performance and Spend Sub-Menu
