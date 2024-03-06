@@ -1,10 +1,10 @@
-library(RPostgreSQL)
-library(DBI)
-library(ggplot2)
-library(sf) # May not need this
+library(RPostgreSQL) # Database Interface (DBI) compliant driver to access PostgreSQL  
+library(DBI) # Database management connections
+library(ggplot2) # For plotting 
+library(sf) # Spatial manipulation package - used in Q2.1 choropleth map, st_read() function to read the dataset as a sf object
 library(dplyr)
 library(tidyr)
-library(patchwork) # May not need this
+library(patchwork) # For grouping plots in one display
 library(scales) # for percentage display in 2.1 function (NOTE: double check if I kept this)
 library(cluster) # For cluster analysis in 2.3 Spend (NOTE: double check if I kept this)
 library(lubridate) # For W0 vs W9 analysis
@@ -20,7 +20,7 @@ con <- dbConnect(drv, dbname='gp_practice_data', host='localhost',
                  password=.rs.askForPassword('Password:'))
 
 
-###### FUNCTIONS ######
+#### FUNCTIONS #### ######
 
 # Function to query practices by postcode
 query_practices_by_postcode <- function(postcode) {
@@ -46,6 +46,7 @@ query_similar_practices <- function(postcode) {
 
 # Function to calculate median threshold
 calculate_median_threshold <- function(con) {
+  # Median threshold was chosen to account for data that is not normally distributed, as a mean threshold would skew the data.
   query <- "
     WITH PrescriptionCounts AS (
       SELECT practiceid, COUNT(*) AS total_prescriptions
@@ -71,11 +72,11 @@ calculate_median_threshold <- function(con) {
 
 # Function to define size of practice
 define_practice_size_by_median <- function(con, practice_id) {
-  # Median threshold was chosen to account for data that is not normally distributed, as a mean threshold would skew the data.
-  # Dynamically calculate the median threshold
+  
+  # Apply median threshold calculation function
   median_threshold <- calculate_median_threshold(con)
   
-  # SQL query to count total prescriptions for the given practice_id
+  # Query to count total prescriptions for the given practice_id
   query <- sprintf("
                    SELECT COUNT(*) AS total_prescriptions
                    FROM gp_data_up_to_2015
@@ -85,10 +86,10 @@ define_practice_size_by_median <- function(con, practice_id) {
   result <- dbGetQuery(con, query)
   
   # Extract the total prescriptions count
-  total_prescriptions <- ifelse(nrow(result) > 0, result$total_prescriptions, 0)
+  total_prescriptions <- ifelse (nrow(result) > 0, result$total_prescriptions, 0)
   
   # Categorize the practice based on the median threshold
-  practice_size <- if (total_prescriptions > median_threshold) 'Big' else 'Small'
+  practice_size <- ifelse (total_prescriptions > median_threshold, 'Big', 'Small')
   
   cat(sprintf("\nThe size of this practice (based on number of prescriptions in Wales) is classified as: %s.\n", practice_size))
   
@@ -173,7 +174,7 @@ fetch_mean_hypertension_rate_same_size <- function(con, practice_size) {
     FROM gp_data_up_to_2015
     GROUP BY practiceid
   ")
-  practice_sizes$size_category <- ifelse(practice_sizes$total_prescriptions > median_threshold, 'Big', 'Small')
+  practice_sizes$size_category <- ifelse (practice_sizes$total_prescriptions > median_threshold, 'Big', 'Small')
   same_size_practices <- practice_sizes %>% 
     filter(size_category == practice_size) %>% 
     .$practiceid
@@ -198,13 +199,13 @@ visualize_hypertension_comparison <- function(con, selected_practice_id, practic
   cat("\nPlotting Comparison of Hypertension Rate...\n")
   same_size_data <- fetch_mean_hypertension_rate_same_size(con, practice_size)
   
-  # Check for empty data frames before proceeding
+  # Check for empty data frames
   if (nrow(practice_data) == 0 || nrow(wales_data) == 0 || nrow(same_size_data) == 0) {
     cat("No data available for one or more categories. Cannot proceed with visualization.\n")
     return()
   }
   
-  # Assign labels if all data frames have rows
+  # Assign labels
   practice_data$Category <- "Selected Practice"
   wales_data$Category <- "Wales Average"
   same_size_data$Category <- sprintf("%s Practices Average", practice_size)
@@ -217,7 +218,7 @@ visualize_hypertension_comparison <- function(con, selected_practice_id, practic
   print(combined_data)
   cat("\nDefinitions:\n===========\nHYP001: The contractor establishes and maintains a register of patients with established hypertension.\n")
   
-  # Visualize the data
+  # Plot the data
   print(
     ggplot(combined_data, aes(x = indicator, y = percentage, fill = Category)) +
       geom_bar(stat = "identity", position = position_dodge()) +
@@ -261,7 +262,7 @@ fetch_mean_obesity_rate_same_size <- function(con, practice_size) {
     FROM gp_data_up_to_2015
     GROUP BY practiceid
   ")
-  practice_sizes$size_category <- ifelse(practice_sizes$total_prescriptions > median_threshold, 'Big', 'Small')
+  practice_sizes$size_category <- ifelse (practice_sizes$total_prescriptions > median_threshold, 'Big', 'Small')
   same_size_practices <- practice_sizes %>% 
     filter(size_category == practice_size) %>% 
     .$practiceid
@@ -286,13 +287,13 @@ visualize_obesity_comparison <- function(con, selected_practice_id, practice_siz
   cat("\nPlotting Comparison of Obesity Rate...\n")
   same_size_data <- fetch_mean_obesity_rate_same_size(con, practice_size)
   
-  # Check for empty data frames before proceeding
+  # Check for empty dataframes
   if (nrow(practice_data) == 0 || nrow(wales_data) == 0 || nrow(same_size_data) == 0) {
     cat("No data available for one or more categories. Cannot proceed with visualization.\n")
     return()
   }
   
-  # Assign labels if all data frames have rows
+  # Assign labels if all dataframes have rows
   practice_data$Category <- "Selected Practice"
   wales_data$Category <- "Wales Average"
   same_size_data$Category <- sprintf("%s Practices Average", practice_size)
@@ -305,7 +306,7 @@ visualize_obesity_comparison <- function(con, selected_practice_id, practice_siz
   print(combined_data)
   cat("\nDefinitions:\n===========\nOB001W: The contractor establishes and maintains a register of patients aged 16 or over with a BMI greater than or equal to 30 in the preceding 15 months.\n")
   
-  # Visualize the data
+  # Plot the data
   print(
     ggplot(combined_data, aes(x = indicator, y = percentage, fill = Category)) +
       geom_bar(stat = "identity", position = position_dodge()) +
@@ -345,7 +346,7 @@ select_gp_info<- function(){
     # Convert postcode to upper case
     user_postcode <- toupper(user_postcode_raw)
     
-    # Fetch practice(s) by postcode
+    # Fetch practice by postcode
     practices <- query_practices_by_postcode(user_postcode)
     
     # Check if multiple practices are found
@@ -407,7 +408,7 @@ select_gp_info<- function(){
         }
         selection <- as.integer(readline(prompt = "Enter the number of the practice you want to select: "))
         
-        # Validate the selection
+        # Validate selection
         if (selection >= 1 && selection <= nrow(practices)) {
           break
         } else {
@@ -426,7 +427,7 @@ select_gp_info<- function(){
       combined_drug_hypertension_obesity_data(con, selected_practice_postcode, selected_practice_id)
     }
     
-    # After fetching and displaying the information, prompt for next action
+    # Prompt next action
     cat("
   Please make a selection:
   =======================
@@ -434,12 +435,17 @@ select_gp_info<- function(){
   2. Return to Main Menu
   ")
 
-    next_action <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
+    next_action_input <- readline(prompt = "Enter the number of your selection and press Enter: ")
+    next_action <- as.integer(next_action_input)
     
-    if (next_action == 2) {
-      break  # Exit the repeat loop to return to the main menu
+    # Check if conversion to integer resulted in NA values
+    if (is.na(next_action)) {
+      cat("Invalid selection. Returning to Main Menu.\n")
+      break 
+    } else if (next_action == 2) {
+      break 
     } else if (next_action != 1) {
-      cat("Invalid selection. Returning to main menu.\n")
+      cat("Invalid selection. Returning to Main Menu.\n")
       break
     }
   }
@@ -448,18 +454,18 @@ select_gp_info<- function(){
 # Function to interpret correlation results
 interpret_correlation <- function(cor_test_result) {
   
-  # Determine the strength of the correlation based on the absolute value of the correlation coefficient
+  # Determine strength of the correlation
   cor_strength <- abs(cor_test_result$estimate)
   cor_significance <- cor_test_result$p.value
   
   # Define thresholds for the strength of correlation
-  strength <- ifelse(cor_strength < 0.1, "very weak",
-                     ifelse(cor_strength < 0.3, "weak",
-                            ifelse(cor_strength < 0.5, "moderate",
+  strength <- ifelse (cor_strength < 0.1, "very weak",
+                     ifelse (cor_strength < 0.3, "weak",
+                            ifelse (cor_strength < 0.5, "moderate",
                                    "strong")))
   
   # Determine if the correlation is significant
-  significance <- ifelse(cor_significance < 0.05, "statistically significant", "not statistically significant")
+  significance <- ifelse (cor_significance < 0.05, "statistically significant", "not statistically significant")
   
   # Return the interpretation
   return(paste("The correlation is", strength, "and", significance, "."))
@@ -472,7 +478,7 @@ print_drug_options <- function(first_col, second_col) {
     # Prepare first column entry
     first_entry <- first_col[i]
     # Check if there's a corresponding second column entry
-    second_entry <- if (i <= length(second_col)) second_col[i] else ""
+    second_entry <- ifelse (i <= length(second_col), second_col[i], "")
     # Print the line with both entries
     cat(sprintf("%-*s %s\n", max_length + 4, first_entry, second_entry))
   }
@@ -487,9 +493,17 @@ end_of_operation_choice <- function() {
   2. Exit
   ")
   
-  choice <- as.integer(readline(prompt = "Enter the number of your selection and press Enter: "))
+  choice_input <- readline(prompt = "Enter the number of your selection and press Enter: ")
+  choice <- as.integer(choice_input)
+  
+  # Handle non-integer input or out-of-range choices by defaulting to a choice that leads back to the main menu
+  if (is.na(choice) || !(choice %in% c(1, 2))) {
+    cat("Invalid input detected. Returning to Main Menu...\n")
+    choice <- 1
+  }
   
   if (choice == 2) {
+    cat("Exiting program...\nThank you for using the GP Researcher program! Goodbye.\n")
     .GlobalEnv$.keep_running <- FALSE
   }
   
@@ -499,40 +513,40 @@ end_of_operation_choice <- function() {
 # Function for Q1.2: Comparing metformin with hypertension/obesity rates
 select_metformin_drug_info <- function() {
   obesity_query <- "
-                              WITH metformin_prescriptions AS (
-                                SELECT practiceid, SUM(items) AS total_metformin_items
-                                FROM gp_data_up_to_2015
-                                WHERE bnfname LIKE 'Metformin%'
-                                GROUP BY practiceid
-                              ),
-                              obesity_rates AS (
-                                SELECT orgcode, AVG(ratio) * 100 AS obesity_rate
-                                FROM qof_achievement
-                                WHERE indicator = 'OB001W'
-                                GROUP BY orgcode
-                              )
-                              SELECT m.practiceid, m.total_metformin_items, o.obesity_rate
-                              FROM metformin_prescriptions AS m
-                              JOIN obesity_rates AS o ON m.practiceid = o.orgcode
-                              ORDER BY m.total_metformin_items DESC, o.obesity_rate DESC;"
+                    WITH metformin_prescriptions AS (
+                       SELECT practiceid, SUM(items) AS total_metformin_items
+                       FROM gp_data_up_to_2015
+                       WHERE bnfname LIKE 'Metformin%'
+                       GROUP BY practiceid
+                    ),
+                    obesity_rates AS (
+                       SELECT orgcode, AVG(ratio) * 100 AS obesity_rate
+                       FROM qof_achievement
+                       WHERE indicator = 'OB001W'
+                       GROUP BY orgcode
+                    )
+                       SELECT m.practiceid, m.total_metformin_items, o.obesity_rate
+                       FROM metformin_prescriptions AS m
+                       JOIN obesity_rates AS o ON m.practiceid = o.orgcode
+                       ORDER BY m.total_metformin_items DESC, o.obesity_rate DESC;"
   
   hypertension_query <- "
-                                    WITH metformin_prescriptions AS (
-                                      SELECT practiceid, SUM(items) AS total_metformin_items
-                                      FROM gp_data_up_to_2015
-                                      WHERE bnfname LIKE 'Metformin%'
-                                      GROUP BY practiceid
-                                    ),
-                                    hypertension_rates AS (
-                                      SELECT orgcode, AVG(ratio) * 100 AS hypertension_rate
-                                      FROM qof_achievement
-                                      WHERE indicator = 'HYP001'
-                                      GROUP BY orgcode
-                                    )
-                                    SELECT m.practiceid, m.total_metformin_items, h.hypertension_rate
-                                    FROM metformin_prescriptions AS m
-                                    JOIN hypertension_rates AS h ON m.practiceid = h.orgcode
-                                    ORDER BY m.total_metformin_items DESC, h.hypertension_rate DESC;"
+                         WITH metformin_prescriptions AS (
+                            SELECT practiceid, SUM(items) AS total_metformin_items
+                            FROM gp_data_up_to_2015
+                            WHERE bnfname LIKE 'Metformin%'
+                            GROUP BY practiceid
+                         ),
+                         hypertension_rates AS (
+                            SELECT orgcode, AVG(ratio) * 100 AS hypertension_rate
+                            FROM qof_achievement
+                            WHERE indicator = 'HYP001'
+                            GROUP BY orgcode
+                         )
+                            SELECT m.practiceid, m.total_metformin_items, h.hypertension_rate
+                            FROM metformin_prescriptions AS m
+                            JOIN hypertension_rates AS h ON m.practiceid = h.orgcode
+                            ORDER BY m.total_metformin_items DESC, h.hypertension_rate DESC;"
   
   # Execute queries
   obesity_data <- dbGetQuery(con, obesity_query)
@@ -557,7 +571,7 @@ select_metformin_drug_info <- function() {
   cat("Obesity and Metformin:", obesity_interpretation, "\n \n")
   cat("Hypertension and Metformin:", hypertension_interpretation, "\n \n")
   
-  # Compare the two correlations and print a statement about which is stronger
+  # Compare the strength of the two correlations
   if (abs(kendall_test_metformin_obesity$estimate) > abs(kendall_test_metformin_hypertension$estimate)) {
     cat("The relationship between Metformin and Obesity is stronger than the relationship between Metformin and Hypertension.\n")
   } else if (abs(kendall_test_metformin_obesity$estimate) < abs(kendall_test_metformin_hypertension$estimate)) {
@@ -591,16 +605,15 @@ select_metformin_drug_info <- function() {
   # Provide user with choice to exit or return to Main Menu
   user_choice <- end_of_operation_choice()
   
-  # Handle the user's choice
   if (user_choice == 1) {
     # Return to Main Menu
     return(TRUE)
   } else if (user_choice == 2) {
-    # Exit the program by returning FALSE, which will break the main loop
+    # Exit the program by returning FALSE to break the main loop
     cat("Exiting program...\n")
     return(FALSE)
   } else {
-    cat("Invalid choice. Returning to the main menu.\n")
+    cat("Invalid choice. Returning to the Main Menu...\n")
     return(TRUE)
   }
 }
@@ -636,7 +649,7 @@ select_diabetic_drug_info <- function() {
   first_col <- diabetic_drugs$IndexDesc[1:split_row]
   second_col <- diabetic_drugs$IndexDesc[(split_row + 1):nrow(diabetic_drugs)]
   
-  # Combine the two columns. Since we're not padding, no need to adjust for length differences
+  # Combine the two columns
   combined_cols <- list(first_col, second_col)
   
   # Display the list of drugs to the user
@@ -652,7 +665,7 @@ select_diabetic_drug_info <- function() {
     return(TRUE) # Return to the main menu
   }
   
-  cat("Performing analysis. This may take a few moments...\n \n")
+  cat("Performing analysis. Please wait, this may take up to a minute...\n \n")
   
   # Get the selected drug's chemical
   selected_drug_chemical <- diabetic_drugs$bnfchemical[drug_choice]
@@ -677,7 +690,7 @@ select_diabetic_drug_info <- function() {
                                 SELECT d.practiceid, d.total_drug_items, o.obesity_rate
                                 FROM drug_prescriptions d
                                 JOIN obesity_rates o ON d.practiceid = o.orgcode
-                            ", selected_drug_chemical);
+                                ", selected_drug_chemical);
   
   # Similar query for hypertension rates, using the first 8 characters
   hypertension_query <- sprintf("
@@ -696,7 +709,7 @@ select_diabetic_drug_info <- function() {
                                 SELECT d.practiceid, d.total_drug_items, h.hypertension_rate
                                 FROM drug_prescriptions d
                                 JOIN hypertension_rates h ON d.practiceid = h.orgcode
-                            ", selected_drug_chemical);
+                                ", selected_drug_chemical);
   
   # Execute queries
   obesity_data <- dbGetQuery(con, prescription_query)
@@ -783,11 +796,11 @@ select_diabetic_drug_info <- function() {
     # Return to main menu by breaking out of the current function and returning to the main loop
     return(TRUE)
   } else if (user_choice == 2) {
-    # Exit the program by returning FALSE, which will break the main loop
+    # Exit the program by returning FALSE to break the main loop
     cat("Exiting program...\n")
     return(FALSE)
   } else {
-    cat("Invalid choice. Returning to the main menu.\n")
+    cat("Invalid choice. Returning to Main Menu...\n")
     return(TRUE)
   }
   
@@ -809,6 +822,8 @@ fetch_chd_rate_specific <- function(con, practice_id) {
 
 # Function to standardize county
 standardize_county <- function(county, posttown) {
+  
+  # NOTE: While this method of standardizing by county is not the most elegant, the 'posttown' column often provided a better indicator of which of the 22 counties a practice was in. I had tried to standardize using 'postcode', however there was so much overlap between multiple counties and the postcode prefix that it seemed to make things more complicated and I could not get it to work. Therefore assigning specific strings in the posttown and county columns to one of the 22 counties was the most successful method I could come up with.
   
   # Convert posttown to county to handle those with inconsistent 'county' columns
   posttown_to_county <- c(
@@ -1090,7 +1105,7 @@ standardize_county <- function(county, posttown) {
 # Function to assign practice to county
 assign_county <- function(postcode, county, posttown) {
   
-  # Welsh county df
+  # Welsh county dataframe
   welsh_county_code <- c("W06000001", "W06000019", "W06000013", "W06000018", "W06000015", "W06000010", "W06000008", "W06000003", "W06000004", "W06000005", "W06000014", "W06000002", "W06000024", "W06000021", "W06000012", "W06000022", "W06000009", "W06000023", "W06000016", "W06000011", "W06000020", "W06000006")
   welsh_county <- c("Isle of Anglesey", "Blaenau Gwent", "Bridgend", "Caerphilly", "Cardiff", "Carmarthenshire", "Ceredigion", "Conwy", "Denbighshire", "Flintshire", "Vale of Glamorgan", "Gwynedd", "Merthyr Tydfil", "Monmouthshire", "Neath Port Talbot", "Newport", "Pembrokeshire", "Powys", "Rhondda Cynon Taf", "Swansea", "Torfaen", "Wrexham")
   welsh_postcode <- c("LL58|LL59|LL60|LL61|LL62|LL64|LL65|LL66|LL67|LL68|LL69|LL70|LL71|LL72|LL73|LL74|LL75|LL76|LL77|LL78", "NP2|NP3|NP23", "CF31|CF32|CF33|CF34|CF35|CF36", "CF46|CF81|CF82|CF83|NP11", "CF3|CF5|CF83", "SA4|SA14|SA15|SA16|SA17|SA18|SA19|SA20|SA31|SA32|SA33|SA34|SA38|SA39|SA40|SA44|SA48|SA66", "SA38|SA40|SA43|SA44|SA45|SA46|SA47|SA48|SY20|SY23|SY24|SY25", "LL16|LL21|LL22|LL24|LL25|LL26|LL27|LL28|LL29|LL30|LL31|LL32|LL33|LL34|LL57", "CH7|LL11|LL15|LL16|LL17|LL18|LL19|LL20|LL21|LL22", "CH1|CH4|CH5|CH6|CH7|CH8|LL11|LL12|LL18|LL19", "CF1|CF5|CF32|CF35|CF61|CF62|CF63|CF64|CF71", "LL21|LL23|LL33|LL35|LL36|LL37|LL38|LL39|LL40|LL41|LL42|LL43|LL44|LL45|LL46|LL47|LL48|LL49|LL51|LL52|LL53|LL54|LL55|LL57|SY20", "CF46|CF47|CF48", "NP4|NP6|NP7", "SA8|SA9|SA10|SA11|SA12|SA13|SA18", "CF3|NP1|NP2|NP3|NP10|NP19|NP20", "SA34|SA35|SA36|SA37|SA41|SA42|SA43|SA61|SA62|SA63|SA64|SA65|SA66|SA67|SA68|SA69|SA70|SA71|SA72|SA73", "CF44|CF48|HR3|HR5|LD1|LD2|LD3|LD4|LD5|LD6|LD7|LD8|NP7|NP8|SA9|SA10|SY5|SY10|SY15|SY16|SY17|SY18|SY19|SY20|SY21|SY22", "CF37|CF38|CF39|CF40|CF41|CF42|CF43|CF44|CF45|CF72", "SA1|SA2|SA3|SA4|SA5|SA6|SA7|SA18", "NP4|NP44", "LL11|LL12|LL13|LL14|LL20|SY13|SY14")
@@ -1168,7 +1183,7 @@ plot_county_performance_chd <- function(combined_data, county_centile_data) {
   plot1 <- ggplot(combined_data) +
     geom_sf(aes(fill = average_centile), color = "white", size = 0.2) +
     scale_fill_viridis_c(option = "C", direction = -1, na.value = "grey", end = 0.9, name = "Avg Centile Score") +
-    labs(title = "Average CHD Centile Scores by County in Wales") +
+    labs(title = "Average CHD Performance by County in Wales") +
     theme_void() + 
     theme(legend.position = "bottom",
           plot.title = element_text(hjust = 0.5),
@@ -1178,10 +1193,11 @@ plot_county_performance_chd <- function(combined_data, county_centile_data) {
   
   # Arrange centile scores by descending order
   county_centile_data <- county_centile_data %>%
+    filter(!is.na(county)) %>%
     arrange(desc(average_centile)) 
   
   # Convert to percentages
-  county_centile_data$average_centile <- percent(county_centile_data$average_centile / 100)
+  county_centile_data$average_centile <- percent(county_centile_data$average_centile)
   
   # Print centile scores
   cat("Summary information:\n===================\n \n")
@@ -1219,7 +1235,6 @@ fetch_practice_location_info <- function(selected_practice_id) {
   
   return(location_info)
 }
-
 
 # Function for Q2.1
 select_gp_info_chd <- function(){
@@ -1270,7 +1285,7 @@ select_gp_info_chd <- function(){
         
         # Check if the result is empty
         if (nrow(user_chd_performance) == 0 || is.na(user_chd_performance$centile[1])) {
-          user_chd_performance <- data.frame(centile = NA) # Ensure there's a row with NA if no data is found
+          user_chd_performance <- data.frame(centile = NA)
         } else {
           # Convert to percentage
           practice_chd_percentage <- user_chd_performance$centile[1] * 100
@@ -1280,11 +1295,11 @@ select_gp_info_chd <- function(){
         location_info <- fetch_practice_location_info(selected_practice_id)
 
         # Assign practiceID of selected practice to county using assign_county function
-        if(nrow(location_info) > 0) {
+        if (nrow(location_info) > 0) {
           standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
           true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
 
-          # Fetch avg centile of that selected practice's county
+          # Fetch average centile of that selected practice's county
           county_performance_data <- retrieve_county_performance_chd()
           if (!is.null(county_performance_data) && nrow(county_performance_data$county_centile_data) > 0 && !is.na(true_county_name)) {
             selected_county_avg_chd <- county_performance_data$county_centile_data %>%
@@ -1352,7 +1367,7 @@ select_gp_info_chd <- function(){
       
       # Check if the result is empty
       if (nrow(user_chd_performance) == 0 || is.na(user_chd_performance$centile[1])) {
-        user_chd_performance <- data.frame(centile = NA) # Ensure there's a row with NA if no data is found
+        user_chd_performance <- data.frame(centile = NA)
       } else {
         # Convert to percentage
         practice_chd_percentage <- user_chd_performance$centile[1] * 100
@@ -1362,7 +1377,7 @@ select_gp_info_chd <- function(){
       location_info <- fetch_practice_location_info(selected_practice_id)
       
       # Assign practiceID of selected practice to county using assign_county function
-      if(nrow(location_info) > 0) {
+      if (nrow(location_info) > 0) {
         standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
         true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
 
@@ -1376,7 +1391,6 @@ select_gp_info_chd <- function(){
             county_avg_chd_percentage <- selected_county_avg_chd * 100
           }
         }
-        
         
         # Check if the CHD performance data is not missing
         if (!is.na(user_chd_performance$centile) && !is.na(selected_county_avg_chd)) {
@@ -1440,7 +1454,7 @@ select_gp_info_chd <- function(){
       
       # Check if the result is empty
       if (nrow(user_chd_performance) == 0 || is.na(user_chd_performance$centile[1])) {
-        user_chd_performance <- data.frame(centile = NA) # Ensure there's a row with NA if no data is found
+        user_chd_performance <- data.frame(centile = NA)
       } else {
         # Convert to percentage
         practice_chd_percentage <- user_chd_performance$centile[1] * 100
@@ -1450,7 +1464,7 @@ select_gp_info_chd <- function(){
       location_info <- fetch_practice_location_info(selected_practice_id)
       
       # Assign practiceID of selected practice to county using assign_county function
-      if(nrow(location_info) > 0) {
+      if (nrow(location_info) > 0) {
         standardized_county <- standardize_county(location_info$county[1], location_info$posttown[1])
         true_county_name <- assign_county(location_info$postcode[1], standardized_county, location_info$posttown[1])
 
@@ -1464,7 +1478,6 @@ select_gp_info_chd <- function(){
             county_avg_chd_percentage <- selected_county_avg_chd * 100
           }
         }
-        
         
         # Check if the CHD performance data is not missing
         if (!is.na(user_chd_performance$centile) && !is.na(selected_county_avg_chd)) {
@@ -1511,12 +1524,12 @@ select_gp_info_chd <- function(){
     
     # Check if the conversion to integer resulted in NA due to invalid input
     if (is.na(next_action)) {
-      cat("Invalid selection. Returning to main menu.\n")
+      cat("Invalid selection. Returning to Main Menu...\n")
       break 
     } else if (next_action == 2) {
       break 
     } else if (next_action != 1) {
-      cat("Invalid selection. Returning to main menu.\n")
+      cat("Invalid selection. Returning to Main Menu...\n")
       break
     }
   }
@@ -1539,17 +1552,17 @@ interpret_cluster_correlation <- function(cluster_number, correlation, variable1
   weak_threshold <- 0.3
   
   # Determine the strength of the correlation
-  strength <- ifelse(abs(correlation) > strong_threshold, "STRONG",
-                     ifelse(abs(correlation) < weak_threshold, "WEAK", "MODERATE"))
+  strength <- ifelse (abs(correlation) > strong_threshold, "STRONG",
+                     ifelse (abs(correlation) < weak_threshold, "WEAK", "MODERATE"))
   
   # Determine the direction of the correlation
-  direction <- ifelse(correlation > 0, "POSITIVE", "NEGATIVE")
+  direction <- ifelse (correlation > 0, "POSITIVE", "NEGATIVE")
   
   # Construct the sentence
   sentence <- sprintf("\nFor Cluster %d: there is a %s and %s correlation between %s and %s (%.3f).\n This suggests that within this cluster, practices that spend %s on %s tend to have %s performance.\n",
                       cluster_number, direction, strength, variable1, variable2, correlation, 
-                      ifelse(correlation > 0, "more", "less"), variable1, 
-                      ifelse(correlation > 0, "better", "worse"))
+                      ifelse (correlation > 0, "more", "less"), variable1, 
+                      ifelse (correlation > 0, "better", "worse"))
   return(sentence)
 }
 
@@ -1557,14 +1570,17 @@ interpret_cluster_correlation <- function(cluster_number, correlation, variable1
 select_efficiency_info <- function() {
   cat("
   
+Welcome to the Performance and Spend Sub-Menu:
+=============================================
+
 Coronary heart disease (CHD) is a chronic condition and one of the leading causes of death worldwide, resulting in thousands of hospitalizations in Wales per year. 
 
 One of the most common treatments for heart disease is the use of beta blockers, a preventative measure against myocardial infarction (MI). These block cell receptors that - if bound and activated - would normally result in the release of hormones responsible for increasing heart rate and thereby potential health consequences.
 
-Use the menu options below to explore the data regarding CHD at practices across Wales.
+Use the menu options below to explore the performance and spend data for CHD at practices across Wales.
 
     Performance and Spend Sub-Menu:
-    =====================================
+    ==============================
     1. Management of CHD by county
     2. Spend efficiency
     3. Identify outliers
@@ -1576,19 +1592,29 @@ Use the menu options below to explore the data regarding CHD at practices across
   
   switch(choice,
          { # Option 1. Management of CHD by county
+           
+           cat("
+  
+Management of CHD by county:
+===========================
+
+The 'performance' of CHD for a practice is a centile ranking based on the frequency distribution of CHD across all practices in Wales. As this centile has a 1:1 correlation with the rate of CHD, higher performance indicates a higher rate of CHD at that practice or county.
+
+  ")
            cat("Performing analysis. Please wait...\n \n")
            
-           # Plot centile scores choropleth
+           # Plot choropleth map of CHD centile scores
            county_performance_data_chd <- retrieve_county_performance_chd()
            plot_county_performance_chd(county_performance_data_chd$combined_data, county_performance_data_chd$county_centile_data)
            
            # Plot user selection vs county
-           # NOTE: I wanted to compare the user's selected practice CHD centile performance to its respective county average CHD performance but I just couldn't get it to work as intended. While some practices do work (such as ST. LUKE'S SURGERY which can be searched for with the postcode: NP11 5GX), displaying the centile performance comparison as a bar chart, many simply return NA values. I have implemented NA checks so that the code still runs, but having double-checked specific practices that are returning 'NA' and finding that they do have CHD centile values, I am unsure where precisely the issue is occurring. 
-           # NOTE: My aim was to use this county information to control for geographic location (as a rough proxy for demographic confounders not present in the database) to explore spend efficiency on CHD-related drugs as an alternative to just comparing to bigger/smaller practices, and provide more granularity than searching by region (i.e. the seven regions defined by the first two letters of the postcode) or by simply comparing to Wales as a whole.
+           # NOTE: I wanted to compare the user's selected practice CHD centile performance to its respective county CHD performance but I just could not get it to work as intended. While some practices do work (such as ST. LUKE'S SURGERY which can be searched for with the postcode: NP11 5GX), displaying the centile performance comparison as a bar chart as intended, many simply return NA values. I have implemented NA checks so that the code still runs, but having double-checked specific practices that are returning 'NA' and finding that they do have CHD centile values, I am unsure where precisely the issue is occurring. Therefore the accuracy of the analysis cannot be reliable.
+           # NOTE: My aim was to use this county information to control for geographic location (as a rough proxy for demographic confounders not present in the database) to explore spend efficiency on CHD-related drugs as an alternative to just comparing to bigger/smaller practices, and provide more granularity than dividing by region (i.e. by the first two letters of the postcode) or by simply comparing to Wales as a whole.
+           cat("
+  
+Please enter the postcode of the practice you wish to investigate.
+  ")
            select_gp_info_chd()
-             
-           
-           
          },
          { # Option 2. Spend efficiency
            cat("Performing analysis. Please wait...\n \n")
@@ -1702,7 +1728,7 @@ Use the menu options below to explore the data regarding CHD at practices across
            data_normalized <- as.data.frame(scale(cluster_data[,c("total_spend_on_beta_blockers", "total_quantity_of_chd_medication", "number_of_chd_related_prescriptions", "performance_centile")]))
            
            # Perform k-means clustering
-           set.seed(100)  # Ensure reproducibility
+           set.seed(100)
            k_means_result <- kmeans(data_normalized, centers = 3)
            
            # Attach cluster assignment to original data
@@ -1741,7 +1767,7 @@ Use the menu options below to explore the data regarding CHD at practices across
                theme_minimal()
            
            # MDS Plot
-           mds_df <- as.data.frame(cmdscale(dist(data_normalized), k = 2))  # Convert to a dataframe
+           mds_df <- as.data.frame(cmdscale(dist(data_normalized), k = 2))
            mds_df$cluster <- cluster_data$cluster
            
            plot4 <- ggplot(mds_df, aes(x = V1, y = V2, color = factor(cluster))) +
@@ -1760,7 +1786,6 @@ Use the menu options below to explore the data regarding CHD at practices across
            
            print((plot1 | plot2) / (plot3 | plot4))
           
-
            # Summarize the cluster data
            cat("\n \n")
            cluster_summary <- cluster_data %>%
@@ -1802,7 +1827,6 @@ Use the menu options below to explore the data regarding CHD at practices across
                quantity_performance_correlation = cor(total_quantity_of_chd_medication, performance_centile, use = "complete.obs")
              )
            
-           
            # Apply the function to each row in the cluster_correlations dataframe
            cat("\nSummary information:\n===================\n")
            interpretations <- lapply(1:nrow(cluster_correlations), function(i) {
@@ -1834,10 +1858,9 @@ Use the menu options below to explore the data regarding CHD at practices across
                     x = "Cluster",
                     y = variable) +
                theme_minimal()
-             print(last_plot()) # Display the plot
+             print(last_plot())
            }
           
-           
            # Fetch GP surgery names
            gp_data <- dbGetQuery(con, 
                                  "SELECT DISTINCT gp.practiceid, ad.street 
@@ -1894,22 +1917,22 @@ Use the menu options below to explore the data regarding CHD at practices across
              cat("Exiting program...\n")
              return(FALSE)
            } else {
-             cat("Invalid choice. Returning to the main menu.\n")
+             cat("Invalid choice. Returning to the Main Menu...\n")
              return(TRUE)
            }
          },
          { # Return to Main Menu
            cat("Returning to Main Menu...\n \n")
-           return(TRUE) # Use return value to control the main loop
+           return(TRUE)
          },
          { # Exit
-           .GlobalEnv$.keep_running <- FALSE # Set the global flag to FALSE to stop the program
+           .GlobalEnv$.keep_running <- FALSE
            cat("Exiting program...\n \n")
-           return(FALSE) # Use return value to control the main loop
+           return(FALSE)
          },
          { # Default case for unexpected values
            cat("Invalid selection. Please try again.\n")
-           return(TRUE) # Stay in the sub-menu
+           return(TRUE)
          }
   )
 }
@@ -1938,28 +1961,28 @@ main_menu <- function() {
   
   if (!is.na(choice)) {
     switch(choice,
-           { # Option 1
+           { # Option 1. Select a GP surgery for prescription, hypertension, and obesity information
              cat("You selected option 1\n")
              cat("Please wait a few seconds...\n \n")
              select_gp_info()
            },
-           { # Option 2
+           { # Option 2. Compare Metformin prescription rates with hypertension and obesity rates
              cat("You selected option 2\n")
              cat("Please wait a few seconds...\n \n")
              select_metformin_drug_info()
            },
-           { # Option 3
+           { # Option 3. Select a diabetic drug to compare with hypertension and obesity rates
              cat("You selected option 3\n")
              cat("Please wait a few seconds...\n \n")
              select_diabetic_drug_info()
              
            },
-           { # Option 4
+           { # Option 4. Performance and Spend Sub-Menu
              cat("You selected option 4\n")
              cat("Please wait a few seconds...\n \n")
              select_efficiency_info()
            },
-           { # Option 5
+           { # Option 5. Exit
              cat("Exiting program...\n")
              return(FALSE)
            },
@@ -1990,4 +2013,3 @@ repeat {
 
 # Disconnect from the database
 dbDisconnect(con)
-
