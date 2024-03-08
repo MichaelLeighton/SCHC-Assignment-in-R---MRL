@@ -1608,8 +1608,9 @@ The 'performance' of CHD for a practice is a centile ranking based on the freque
            plot_county_performance_chd(county_performance_data_chd$combined_data, county_performance_data_chd$county_centile_data)
            
            # Plot user selection vs county
-           # NOTE: I wanted to compare the user's selected practice CHD centile performance to its respective county CHD performance but I just could not get it to work as intended. While some practices do work (such as ST. LUKE'S SURGERY which can be searched for with the postcode: NP11 5GX), displaying the centile performance comparison as a bar chart as intended, many simply return NA values. I have implemented NA checks so that the code still runs, but having double-checked specific practices that are returning 'NA' and finding that they do have CHD centile values, I am unsure where precisely the issue is occurring. Therefore the accuracy of the analysis cannot be reliable.
-           # NOTE: My aim was to use this county information to control for geographic location (as a rough proxy for demographic confounders not present in the database) to explore spend efficiency on CHD-related drugs as an alternative to just comparing to bigger/smaller practices, and provide more granularity than dividing by region (i.e. by the first two letters of the postcode) or by simply comparing to Wales as a whole.
+           # NOTE 1: I wanted to compare the user's selected practice CHD centile performance to its respective county CHD performance but I just could not get it to work as intended. I had tried to implement a postcode prefix condition to improve accuracy but there is so much overlap between postcodes and different counties that this only served to complicate. 
+           # NOTE 2: While some practices do work (such as ST. LUKE'S SURGERY which can be searched for with the postcode: NP11 5GX), displaying the centile performance comparison as a bar chart as intended, many simply return NA values. I have implemented NA checks so that the code still runs, but having double-checked specific practices that are returning 'NA' and finding that they do have CHD centile values, I am unsure where precisely the issue is occurring. Therefore the accuracy of the analysis cannot be considered reliable.
+           # NOTE 3: As there was no specific patient data, my aim was to use this county information (and in subsequent analyses clustering the data) to control for geographic location as a loose proxy for demographic confounders not available in the data, exploring spend efficiency on CHD-related drugs as an alternative to just comparing to bigger/smaller practices, and provide more granularity than dividing by region (i.e. by the first two letters of the postcode) or by simply comparing to Wales as a whole. With more time and experience, I would have liked to drill further down, allowing the user to select a practice versus the respective county and cluster, controlling for practice size.
            cat("
   
 Please enter the postcode of the practice you wish to investigate.
@@ -1724,6 +1725,14 @@ Please enter the postcode of the practice you wish to investigate.
            
            cluster_data <- dbGetQuery(con, query)
            
+           # Create variable names map for plotting later
+           variable_names_map <- c(
+             total_spend_on_beta_blockers = "Total Spend",
+             total_quantity_of_chd_medication = "Total Quantity of Beta Blockers",
+             number_of_chd_related_prescriptions = "Beta Blocker Prescriptions",
+             performance_centile = "Performance"
+           )
+           
            # Normalize the data
            data_normalized <- as.data.frame(scale(cluster_data[,c("total_spend_on_beta_blockers", "total_quantity_of_chd_medication", "number_of_chd_related_prescriptions", "performance_centile")]))
            
@@ -1737,7 +1746,7 @@ Please enter the postcode of the practice you wish to investigate.
            # Analyze the clusters
            cluster_data %>%
              group_by(cluster) %>%
-             summarise(across(everything(), mean, na.rm = TRUE))
+             summarise(across(where(is.numeric), mean, na.rm = TRUE))
            
            # Scatter plot for spend vs. performance centile
            plot1 <- ggplot(cluster_data, aes(x = total_spend_on_beta_blockers, y = performance_centile, color = factor(cluster))) +
@@ -1791,6 +1800,7 @@ Please enter the postcode of the practice you wish to investigate.
            cluster_summary <- cluster_data %>%
              group_by(cluster) %>%
              summarise(
+               count = n(),
                mean_spend = mean(total_spend_on_beta_blockers, na.rm = TRUE),
                median_spend = median(total_spend_on_beta_blockers, na.rm = TRUE),
                mean_performance_centile = mean(performance_centile, na.rm = TRUE),
@@ -1800,8 +1810,13 @@ Please enter the postcode of the practice you wish to investigate.
                mean_number_prescriptions = mean(number_of_chd_related_prescriptions, na.rm = TRUE),
                median_number_prescriptions = median(number_of_chd_related_prescriptions, na.rm = TRUE)
              )
+           
+           # Calculate percentages
+           total_count <- sum(cluster_summary$count)
+           cluster_summary$cluster_percentage <- (cluster_summary$count / total_count) * 100
+           
            cat("\nCluster Summary:\n===============\n")
-           colnames(cluster_summary) <- c('Cluster', 'Mean spend', 'Median spend', 'Mean performance centile', 'Median performance centile', 'Mean quantity CHD medication')
+           colnames(cluster_summary) <- c('Cluster', 'Mean spend', 'Median spend', 'Mean performance centile', 'Median performance centile', 'Mean quantity CHD medication', 'Mean number of prescriptions', 'Median number of prescriptions')
            print(cluster_summary)
            
            # Count the number of practices in each cluster and calculate the percentage of total practices
@@ -1852,11 +1867,15 @@ Please enter the postcode of the practice you wish to investigate.
            variables_to_plot <- c("total_spend_on_beta_blockers", "performance_centile", "total_quantity_of_chd_medication", "number_of_chd_related_prescriptions")
            
            for (variable in variables_to_plot) {
+             plotting_name <- variable_names_map[variable]
+             plot_title <- paste(plotting_name, "by Cluster")
+             y_axis_label <- plotting_name
+             
              ggplot(cluster_data, aes_string(x = "factor(cluster)", y = variable)) +
                geom_boxplot() +
-               labs(title = paste("Box plot of", variable, "by cluster"),
+               labs(title = plot_title,
                     x = "Cluster",
-                    y = variable) +
+                    y = y_axis_label) +
                theme_minimal()
              print(last_plot())
            }
@@ -1892,15 +1911,17 @@ Please enter the postcode of the practice you wish to investigate.
                cluster_subset <- cluster_data[cluster_data$cluster == cluster, ]
                outliers <- identify_outliers(cluster_subset, variable, gp_data)
                if (nrow(outliers) > 0) {
+                 table_name <- variable_names_map[variable]
                  cat("\n \n")
-                 cat(paste("Outliers in cluster", cluster, "for", variable, ":\n"))
+                 cat(paste("Outliers in cluster", cluster, "for", table_name, ":\n"))
                  
                  # Create temporary copy with renamed columns
                  temp_outliers <- outliers
+                 colnames(temp_outliers)[colnames(temp_outliers) == variable] <- table_name
                  colnames(temp_outliers)[colnames(temp_outliers) == 'practiceid'] <- 'Practice ID'
                  colnames(temp_outliers)[colnames(temp_outliers) == 'street'] <- 'GP Surgery'
                  
-                 print(temp_outliers[, c("Practice ID",'GP Surgery', variable)])
+                 print(temp_outliers[, c("Practice ID",'GP Surgery', table_name)])
                }
              })
            })
