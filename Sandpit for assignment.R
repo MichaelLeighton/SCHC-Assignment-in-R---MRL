@@ -823,7 +823,7 @@ fetch_chd_rate_specific <- function(con, practice_id) {
 # Function to standardize county
 standardize_county <- function(county, posttown) {
   
-  # NOTE: While this method of standardizing by county is not the most elegant, the 'posttown' column often provided a better indicator of which of the 22 counties a practice was in. I had tried to standardize using 'postcode', however there was so much overlap between multiple counties and the postcode prefix that it seemed to make things more complicated and I could not get it to work. Therefore assigning specific strings in the posttown and county columns to one of the 22 counties was the most successful method I could come up with.
+  # NOTE: While this method of standardizing by county is not the most elegant, the 'posttown' column often provided a better indicator of which of the 22 counties a practice was in than the 'county', which was often the names of preserved counties comprising multiple modern counties. I had tried to standardize using 'postcode', however there was so much overlap between counties and postcode prefixes that it seemed to make things more complicated without noticeable benefit. Therefore assigning specific strings in the posttown and county columns to one of the 22 counties was the most successful method I could come up with after many revised approaches.
   
   # Convert posttown to county to handle those with inconsistent 'county' columns
   posttown_to_county <- c(
@@ -1538,9 +1538,9 @@ select_gp_info_chd <- function(){
 # Function to interpret cluster results
 interpret_clusters <- function(cluster_percentages, threshold) {
   if (any(cluster_percentages > threshold)) {
-    interpretation <- cat("\nThere is a dominating cluster, indicating a specific strategy in treating CHD. This suggests little diversity in the management of this disease across practices.\n")
+    interpretation <- cat("\nThere is a dominating cluster, possibly indicating a specific strategy in treating CHD with this drug. This also suggests little diversity in CHD prevalence across practices in Wales.\n")
   } else {
-    interpretation <- cat("\nThere is no dominating cluster, indicating that there is no universal strategy adopted in treating CHD. This suggests substantial diversity in the management of this disease across practices.\n")
+    interpretation <- cat("\nThere is no dominating cluster, possibly indicating that there is no universal strategy adopted in treating CHD with this drug. This also suggests greater diversity in CHD prevalence across practices in Wales.\nA more nuanced understanding of local health factors and demographics is needed to refine CHD management.\n")
   }
   return(interpretation)
 }
@@ -1559,10 +1559,10 @@ interpret_cluster_correlation <- function(cluster_number, correlation, variable1
   direction <- ifelse (correlation > 0, "POSITIVE", "NEGATIVE")
   
   # Construct the sentence
-  sentence <- sprintf("\nFor Cluster %d: there is a %s and %s correlation between %s and %s (%.3f).\n This suggests that within this cluster, practices that spend %s on %s tend to have %s performance.\n",
+  sentence <- sprintf("\nFor Cluster %d: there is a %s and %s correlation between %s and %s (%.3f).\n This suggests that within this cluster, practices that spend %s on %s tend to rank %s in performance for CHD frequenc.\n",
                       cluster_number, direction, strength, variable1, variable2, correlation, 
                       ifelse (correlation > 0, "more", "less"), variable1, 
-                      ifelse (correlation > 0, "better", "worse"))
+                      ifelse (correlation > 0, "higher", "lower"))
   return(sentence)
 }
 
@@ -1575,15 +1575,15 @@ Welcome to the Performance and Spend Sub-Menu:
 
 Coronary heart disease (CHD) is a chronic condition and one of the leading causes of death worldwide, resulting in thousands of hospitalizations in Wales per year. 
 
-One of the most common treatments for heart disease is the use of beta blockers, a preventative measure against myocardial infarction (MI). These block cell receptors that - if bound and activated - would normally result in the release of hormones responsible for increasing heart rate and thereby potential health consequences.
+One of the more well known treatments for heart disease is the use of beta blockers, a preventative measure against negative health outcomes such as myocardial infarction. These block cell receptors, that - if bound and activated - would normally result in the release of hormones responsible for increasing heart rate and subsequent health events.
 
 Use the menu options below to explore the performance and spend data for CHD at practices across Wales.
 
     Performance and Spend Sub-Menu:
     ==============================
-    1. Management of CHD by county
-    2. Spend efficiency
-    3. Identify outliers
+    1. Performance of CHD by county
+    2. Spend efficiency of beta blockers
+    3. Identify outliers for CHD performance
     4. Return to Main Menu
     5. Exit
   ")
@@ -1595,10 +1595,10 @@ Use the menu options below to explore the performance and spend data for CHD at 
            
            cat("
   
-Management of CHD by county:
+Performance of CHD by county:
 ===========================
 
-The 'performance' of CHD for a practice is a centile ranking based on the frequency distribution of CHD across all practices in Wales. As this centile has a 1:1 correlation with the rate of CHD, higher performance indicates a higher rate of CHD at that practice or county.
+The 'performance' of CHD for a practice is a centile ranking based on the frequency distribution of CHD across all practices in Wales. As this centile has a 1:1 correlation with the rate of CHD across all practices, higher performance indicates a higher rate of CHD at that practice or county.
 
   ")
            cat("Performing analysis. Please wait...\n \n")
@@ -1609,22 +1609,25 @@ The 'performance' of CHD for a practice is a centile ranking based on the freque
            
            # Plot user selection vs county
            # NOTE 1: I wanted to compare the user's selected practice CHD centile performance to its respective county CHD performance but I just could not get it to work as intended. I had tried to implement a postcode prefix condition to improve accuracy but there is so much overlap between postcodes and different counties that this only served to complicate. 
-           # NOTE 2: While some practices do work (such as ST. LUKE'S SURGERY which can be searched for with the postcode: NP11 5GX), displaying the centile performance comparison as a bar chart as intended, many simply return NA values. I have implemented NA checks so that the code still runs, but having double-checked specific practices that are returning 'NA' and finding that they do have CHD centile values, I am unsure where precisely the issue is occurring. Therefore the accuracy of the analysis cannot be considered reliable.
-           # NOTE 3: As there was no specific patient data, my aim was to use this county information (and in subsequent analyses clustering the data) to control for geographic location as a loose proxy for demographic confounders not available in the data, exploring spend efficiency on CHD-related drugs as an alternative to just comparing to bigger/smaller practices, and provide more granularity than dividing by region (i.e. by the first two letters of the postcode) or by simply comparing to Wales as a whole. With more time and experience, I would have liked to drill further down, allowing the user to select a practice versus the respective county and cluster, controlling for practice size.
+           # NOTE 2: While some practices do work (e.g. ST. LUKE'S SURGERY which can be searched for with the postcode: NP11 5GX), displaying the centile performance comparison as a bar chart as intended, many simply return NA values. I have implemented NA checks so that the code still runs, but having double-checked specific practices that are returning 'NA' and finding that they do have CHD centile values, I am unsure where precisely the issue lies. Therefore the accuracy of the analysis unfortunately cannot be considered reliable.
+           # NOTE 3: As there was no specific patient data, my aim was to use this county information (and in subsequent analyses clustering the data) to control for geographic location as a loose proxy for unavailable demographic confounders, exploring spend efficiency on CHD-related drugs as an alternative to just comparing to bigger/smaller practices, and provide more granularity than dividing by region (i.e. by the first two letters of the postcode) or by simply comparing to Wales as a whole. With more time and experience, I would have sought a more detailed analysis allowing the user to select a practice and compare it against the respective county, cluster, and practice size.
            cat("
-  
+
 Please enter the postcode of the practice you wish to investigate.
   ")
            select_gp_info_chd()
          },
-         { # Option 2. Spend efficiency
-           cat("Performing analysis. Please wait...\n \n")
+         { # Option 2. Spend efficiency on beta blockers
+           cat("Performing spend analysis on beta blockers. Please wait...\n \n")
+           
+           # DEBUG: Initialise spend_per_item_results for later spend per quantity analysis
+           spend_per_item_results <- list()
            
            # Query to find the top 5 beta blockers by spend
            top_beta_blockers_query <- "
                                       SELECT bnfname, SUM(actcost) AS total_spend
                                       FROM gp_data_up_to_2015
-                                      WHERE bnfcode LIKE '0204000%' 
+                                      WHERE bnfcode LIKE '0204000%'
                                       GROUP BY bnfname
                                       ORDER BY total_spend DESC
                                       LIMIT 5;
@@ -1634,7 +1637,7 @@ Please enter the postcode of the practice you wish to investigate.
            bottom_beta_blockers_query <- "
                                           SELECT bnfname, SUM(actcost) AS total_spend
                                           FROM gp_data_up_to_2015
-                                          WHERE bnfcode LIKE '0204000%' 
+                                          WHERE bnfcode LIKE '0204000%'
                                           GROUP BY bnfname
                                           ORDER BY total_spend ASC
                                           LIMIT 5;
@@ -1649,19 +1652,19 @@ Please enter the postcode of the practice you wish to investigate.
            print(top_beta_blockers)
            
            colnames(bottom_beta_blockers) <- c('Drug Type', 'Total Spend (£)')
-           cat("\nBottom 5 Beta Blockers by Spend:\n================================\n")
+           cat("\nBottom 5 Beta Blockers by Spend:\n===============================\n")
            print(bottom_beta_blockers)
            
            # Query relationship between beta blocker spend and CHD performance
            cat("\nPerforming correlation analysis...\n")
            query <- "
-                    SELECT 
+                    SELECT
                         gp.practiceid,
                         SUM(gp.actcost) AS total_spend_on_beta_blockers,
                         q.centile AS performance_centile
-                    FROM 
+                    FROM
                         gp_data_up_to_2015 AS gp
-                    JOIN 
+                    JOIN
                         qof_achievement AS q ON gp.practiceid = q.orgcode
                     WHERE 
                         gp.bnfcode LIKE '0204000%' AND
@@ -1701,9 +1704,98 @@ Please enter the postcode of the practice you wish to investigate.
                theme_minimal()
            )
            
+           
+           # Examine spend per item for top drugs
+           # NOTE: The intention here is to focus on the top 5 beta blockers in overall spend and examine the difference between the practices spending the most and the least on the same drug. Initially I was aiming to compare spend within each county to account for demographic confounders, but unfortunately after many iterations, I was unable to get the code to function and so excluded it.
+           
+           cat("Difference in Spend for the Top Beta Blockers:\n=============================================\n \n")
+           for (drug in top_beta_blockers$`Drug Type`) {
+             cat(sprintf("Highest and lowest spend for %s:\n", drug))
+             
+             # Fetch the highest spending practice for each drug
+             highest_spend_query <- sprintf("
+                                              SELECT 
+                                                'Highest' as Type,
+                                                gp.practiceid,
+                                                ad.street AS GP_Surgery, 
+                                                AVG(gp.actcost / gp.items) AS Average_Spend_per_Item
+                                              FROM 
+                                                gp_data_up_to_2015 AS gp
+                                              JOIN
+                                                address AS ad ON gp.practiceid = ad.practiceid
+                                              WHERE 
+                                                gp.bnfname ILIKE '%%%s%%'
+                                              GROUP BY 
+                                                gp.practiceid, ad.street
+                                              ORDER BY 
+                                                Average_Spend_per_Item DESC
+                                              LIMIT 1
+  ", drug)
+             
+             highest_spend_data <- dbGetQuery(con, highest_spend_query)
+             
+             # Fetch the lowest spending practice for each drug
+             lowest_spend_query <- sprintf("
+                                            SELECT 
+                                              'Lowest' as Type,
+                                              gp.practiceid,
+                                              ad.street AS GP_Surgery, 
+                                              AVG(gp.actcost / gp.items) AS Average_Spend_per_Item
+                                            FROM 
+                                              gp_data_up_to_2015 AS gp
+                                            JOIN
+                                              address AS ad ON gp.practiceid = ad.practiceid
+                                            WHERE 
+                                              gp.bnfname ILIKE '%%%s%%'
+                                            GROUP BY 
+                                              gp.practiceid, ad.street
+                                            ORDER BY 
+                                              Average_Spend_per_Item ASC
+                                            LIMIT 1
+                                              ", drug)
+             
+             lowest_spend_data <- dbGetQuery(con, lowest_spend_query)
+             
+             # Combine the highest and lowest spending practice data
+             combined_spend_data <- rbind(highest_spend_data, lowest_spend_data)
+             
+             # Change column names
+             colnames(combined_spend_data) <- c('Type', 'Practice ID', 'Practice', 'Avg spend per item')
+             
+             # Print the combined data
+             if(nrow(combined_spend_data) == 2) {
+               print(combined_spend_data[, -1]) # Removing the 'Type' column
+             } else {
+               cat(sprintf("Insufficient data for drug: %s\n", drug))
+             }
+             
+             cat("\n")
+           }
+           
+           cat("\nThe disparity in spend could be attributed to various factors, e.g. prescription habits (favouring branded drugs over their generic counterparts), supplier contracts, purchase volume, etc.\n \nHowever, identifying these differences functions as the first step in a series of more in-depth analyses, obtaining information about the geographic location and patient demography of the practices to investigate the cause of these discrepancies further.\n")
+           
+           # Provide user with choice to exit or return to Main Menu
+           user_choice <- end_of_operation_choice()
+           
+           # Handle the user's choice
+           if (user_choice == 1) {
+             # Return to Main Menu
+             return(TRUE)
+           } else if (user_choice == 2) {
+             # Exit the program by returning FALSE, which will break the main loop
+             cat("Exiting program...\n")
+             return(FALSE)
+           } else {
+             cat("Invalid choice. Returning to the Main Menu...\n")
+             return(TRUE)
+           }
+           
          },
          { # Option 3. Identify outliers
 
+           # Introductory text
+           cat("Clustering the data allows for the grouping of practices with similar characteristics regarding CHD performance.\nThis leads to the identification of outliers in each cluster, which can suggest differences worth further investigation, such as practice characteristics, patient population size, or demographic factors.\n")
+           
            # Cluster analysis query
            cat("\nPerforming cluster analysis. Please wait...\n")
            query <- "
@@ -1752,7 +1844,7 @@ Please enter the postcode of the practice you wish to investigate.
            plot1 <- ggplot(cluster_data, aes(x = total_spend_on_beta_blockers, y = performance_centile, color = factor(cluster))) +
             geom_point() +
             labs(title = "Spend vs. Performance",
-                x = "Total Spend on Beta-Blockers",
+                x = "Total Spend on Beta Blockers",
                 y = "Performance Centile",
                 color = "Cluster") +
             theme_minimal()
@@ -1815,7 +1907,7 @@ Please enter the postcode of the practice you wish to investigate.
            total_count <- sum(cluster_summary$count)
            cluster_summary$cluster_percentage <- (cluster_summary$count / total_count) * 100
            
-           cat("\nCluster Summary:\n===============\n")
+           cat("Cluster Summary:\n===============\n")
            colnames(cluster_summary) <- c('Cluster', 'Mean spend', 'Median spend', 'Mean performance centile', 'Median performance centile', 'Mean quantity CHD medication', 'Mean number of prescriptions', 'Median number of prescriptions')
            print(cluster_summary)
            
@@ -1847,8 +1939,8 @@ Please enter the postcode of the practice you wish to investigate.
            interpretations <- lapply(1:nrow(cluster_correlations), function(i) {
              row <- cluster_correlations[i, ]
              cluster_number <- row$cluster
-             spend_performance_corr <- interpret_cluster_correlation(cluster_number, row$spend_performance_correlation, "beta-blockers", "performance centile")
-             spend_quantity_corr <- interpret_cluster_correlation(cluster_number, row$spend_quantity_correlation, "beta-blockers", "total quantity of CHD medication")
+             spend_performance_corr <- interpret_cluster_correlation(cluster_number, row$spend_performance_correlation, "beta blockers", "performance centile")
+             spend_quantity_corr <- interpret_cluster_correlation(cluster_number, row$spend_quantity_correlation, "beta blockers", "total quantity of CHD medication")
              quantity_performance_corr <- interpret_cluster_correlation(cluster_number, row$quantity_performance_correlation, "total quantity of CHD medication", "performance centile")
              c(spend_performance_corr, spend_quantity_corr, quantity_performance_corr)
            })
